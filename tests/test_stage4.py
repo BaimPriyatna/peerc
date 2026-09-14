@@ -13,6 +13,7 @@ import os
 import shutil
 
 import file_transfer
+from core.identity.device_identity import generate_keypair
 from peer import ConnectionManager
 
 PORT_A = 7201
@@ -33,8 +34,12 @@ def make_test_file(path: str, size_bytes: int) -> str:
 async def main() -> None:
     shutil.rmtree(DOWNLOADS_B, ignore_errors=True)
 
-    manager_a = ConnectionManager(listen_port=PORT_A, on_message=None)
-    manager_b = ConnectionManager(listen_port=PORT_B, on_message=None)
+    manager_a = ConnectionManager(
+        listen_port=PORT_A, my_identity=generate_keypair(), my_name="A", on_message=None,
+    )
+    manager_b = ConnectionManager(
+        listen_port=PORT_B, my_identity=generate_keypair(), my_name="B", on_message=None,
+    )
 
     # --- Case 1: accept, expect successful transfer ---
     async def accept_offer(transfer_id, filename, size, sender_name):

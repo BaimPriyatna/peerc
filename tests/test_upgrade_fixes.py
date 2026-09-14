@@ -8,6 +8,8 @@ import chat
 import discovery
 import peer
 import protocol
+from core.identity.device_identity import generate_keypair
+from core.transport.timeout import ConnectTimeoutError
 from peer import ConnectionManager
 
 PORT_A = 7401
@@ -15,7 +17,9 @@ PORT_B = 7402
 
 
 async def test_connect_timeout():
-    manager = ConnectionManager(listen_port=PORT_A, on_message=None)
+    manager = ConnectionManager(
+        listen_port=PORT_A, my_identity=generate_keypair(), my_name="A", on_message=None,
+    )
     # 10.255.255.1 is a non-routable address commonly used to trigger a
     # connect that hangs rather than fails fast.
     try:
@@ -23,7 +27,7 @@ async def test_connect_timeout():
         try:
             await asyncio.wait_for(manager.connect_to("10.255.255.1", 5656), timeout=8.0)
             raise AssertionError("connect should not have succeeded")
-        except (asyncio.TimeoutError, OSError):
+        except (asyncio.TimeoutError, OSError, ConnectTimeoutError):
             pass
         elapsed = asyncio.get_event_loop().time() - start
         assert elapsed < 7.0, f"connect_to should time out around {peer.CONNECT_TIMEOUT}s, took {elapsed}s"
@@ -36,10 +40,19 @@ async def test_connection_limit():
     async def noop(addr_key, message):
         pass
 
-    manager_b = ConnectionManager(listen_port=PORT_B, on_message=noop, max_connections=2)
+    manager_b = ConnectionManager(
+        listen_port=PORT_B, my_identity=generate_keypair(), my_name="B",
+        on_message=noop, max_connections=2,
+    )
     await manager_b.start_server()
     try:
-        managers = [ConnectionManager(listen_port=PORT_B + 10 + i, on_message=noop) for i in range(4)]
+        managers = [
+            ConnectionManager(
+                listen_port=PORT_B + 10 + i, my_identity=generate_keypair(),
+                my_name=f"client-{i}", on_message=noop,
+            )
+            for i in range(4)
+        ]
         connected = 0
         for i, m in enumerate(managers):
             try:
@@ -112,8 +125,12 @@ async def test_chat_oversized_text_rejected_client_side():
     async def noop(addr_key, message):
         pass
 
-    manager_a = ConnectionManager(listen_port=7501, on_message=noop)
-    manager_b = ConnectionManager(listen_port=7502, on_message=noop)
+    manager_a = ConnectionManager(
+        listen_port=7501, my_identity=generate_keypair(), my_name="A", on_message=noop,
+    )
+    manager_b = ConnectionManager(
+        listen_port=7502, my_identity=generate_keypair(), my_name="B", on_message=noop,
+    )
     chat_a = chat.ChatSession(manager_a)
     await manager_a.start_server()
     await manager_b.start_server()
@@ -143,7 +160,9 @@ async def test_ack_race_pending_registered_before_send():
     async def noop(addr_key, message):
         pass
 
-    manager = ConnectionManager(listen_port=7503, on_message=noop)
+    manager = ConnectionManager(
+        listen_port=7503, my_identity=generate_keypair(), my_name="A", on_message=noop,
+    )
     session = chat.ChatSession(manager)
 
     original_send = manager.send

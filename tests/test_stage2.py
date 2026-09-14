@@ -9,6 +9,7 @@ Not a full test suite — just a manual verification script for Stage 2.
 import asyncio
 
 import protocol
+from core.identity.device_identity import generate_keypair
 from peer import ConnectionManager
 
 PORT_A = 7001
@@ -24,8 +25,12 @@ async def main() -> None:
     async def on_message_b(addr_key: str, message: dict) -> None:
         received.append(("B", message))
 
-    manager_a = ConnectionManager(listen_port=PORT_A, on_message=on_message_a)
-    manager_b = ConnectionManager(listen_port=PORT_B, on_message=on_message_b)
+    manager_a = ConnectionManager(
+        listen_port=PORT_A, my_identity=generate_keypair(), my_name="A", on_message=on_message_a,
+    )
+    manager_b = ConnectionManager(
+        listen_port=PORT_B, my_identity=generate_keypair(), my_name="B", on_message=on_message_b,
+    )
 
     await manager_a.start_server()
     await manager_b.start_server()

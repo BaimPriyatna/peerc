@@ -10,10 +10,13 @@ import asyncio
 import hashlib
 import os
 import shutil
+import struct
 import uuid
 
 import file_transfer
 import protocol
+from core.identity.device_identity import generate_keypair
+from core.transport.secure import TYPE_JSON
 from peer import ConnectionManager
 
 PORT_A = 7301
@@ -30,8 +33,12 @@ async def send_chunk(manager, addr_key, transfer_id, sequence, offset, data: byt
 
 async def setup():
     shutil.rmtree(DOWNLOADS_B, ignore_errors=True)
-    manager_a = ConnectionManager(listen_port=PORT_A, on_message=None)
-    manager_b = ConnectionManager(listen_port=PORT_B, on_message=None)
+    manager_a = ConnectionManager(
+        listen_port=PORT_A, my_identity=generate_keypair(), my_name="A", on_message=None,
+    )
+    manager_b = ConnectionManager(
+        listen_port=PORT_B, my_identity=generate_keypair(), my_name="B", on_message=None,
+    )
 
     complete_events = []
 
@@ -173,9 +180,12 @@ async def test_malformed_message_missing_fields_does_not_crash():
     try:
         # Missing required fields entirely (BUG-017) — raw dict, bypasses
         # protocol.make_file_offer on purpose to simulate a hostile peer.
-        writer = manager_a._connections[addr_key].writer
-        protocol.write_message(writer, {"type": "file_offer"})
-        await writer.drain()
+        # Goes through manager_a.send() (real encryption) rather than a
+        # raw socket write now that every connection is authenticated and
+        # encrypted (BUG-004) — send() itself does no schema validation,
+        # so this still reaches B's validate_message() exactly as before.
+        ok = await manager_a.send(addr_key, {"type": "file_offer"})
+        assert ok, "a connected, authenticated peer can still send a malformed dict"
         await asyncio.sleep(0.2)
 
         # Connection should have been dropped cleanly (validate_message
@@ -190,11 +200,21 @@ async def test_malformed_message_missing_fields_does_not_crash():
 async def test_non_dict_json_does_not_crash():
     manager_a, manager_b, ft_b, addr_key, _ = await setup()
     try:
-        writer = manager_a._connections[addr_key].writer
-        import struct
+        # BUG-004: EncryptedTransport.send_message() now guards
+        # isinstance(message, dict) itself, so a well-behaved send() can
+        # no longer put a bare JSON string on the wire at all — that
+        # guard is a real, permanent fix for this specific shape of bug.
+        # To still exercise the receiver's own defense-in-depth (in case
+        # a *different*, non-Python peer implementation ever sends this),
+        # this test drops to the session's own transport primitives to
+        # hand-craft the frame — a legitimate simulation of "an
+        # authenticated peer's implementation is buggy or hostile after
+        # the handshake", not a protocol-layer bypass.
+        session = manager_a._connections[addr_key]
         payload = b'"just a string, not an object"'
-        writer.write(struct.pack(">I", len(payload)) + payload)
-        await writer.drain()
+        frame = session.transport.channel.encrypt(TYPE_JSON + payload)
+        wire_payload = struct.pack(">Q", frame.sequence) + frame.ciphertext
+        await session.transport.tcp.write_binary_frame(wire_payload)
         await asyncio.sleep(0.2)
         print("test_non_dict_json_does_not_crash OK — BUG-018 fixed")
     finally:

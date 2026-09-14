@@ -5,6 +5,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.15.1] — BUG-004: Live secure transport integration
+
+### Fixed
+- **BUG-004 (TCP plaintext)**: `peer.py`'s `ConnectionManager` — the code
+  path every real connection in the running app goes through — was
+  still 100% plaintext TCP with no handshake at all, despite Phase 6-9
+  (`core/crypto/handshake.py`, `core/transport/`) being fully
+  implemented and unit-tested since much earlier. Nothing in `ui.py`/
+  `peer.py`/`chat.py`/`file_transfer.py` ever actually called them.
+- Every connection, incoming or outgoing, now goes through
+  `core/transport`'s mutual authenticated handshake and
+  ChaCha20-Poly1305 session encryption (`initiate_secure_session`/
+  `accept_secure_session`). `ConnectionManager`'s public API is
+  unchanged (`send()`/`send_binary()`/`connect_to()`/`is_connected()`,
+  still addr_key-keyed) so `chat.py`/`file_transfer.py` needed no
+  changes beyond identity plumbing.
+- New `ConnectionManager.get_peer_device_id(addr_key)` — the first place
+  in the app where a peer's device_id is cryptographically verified
+  rather than only self-reported inside an application-level message
+  field.
+- `TrustStore` (Phase 4) finally constructed and wired into the live app
+  for the first time (`ui.py`) — still its own plaintext
+  `~/.peerc/trust.db` for now; migrating it into the encrypted vault is
+  Phase 39.2, not this fix. REVOKED/KEY_CHANGED devices are rejected at
+  the handshake (connection closed); PENDING (first-seen) devices are
+  allowed to proceed, matching `handshake.py`'s existing behavior, and
+  now publish a `TrustRequired` event — `ui.py` logs a notification for
+  it, but full approve/reject UX stays Phase 36/37 as already planned,
+  not folded into this fix.
+- `file_transfer.py`'s `offer_file()` no longer hardcodes
+  `sender_id=""`/`sender_name=""` — it now uses the identity
+  `ConnectionManager` already holds.
+- `my_identity`/`my_name` are required constructor arguments on
+  `ConnectionManager`, with no defaults — a silently-auto-generated
+  throwaway identity would be easy to miss. Every call site (including
+  all test fixtures) was made explicit.
+- Found and fixed a Python 3.12-specific hang: `asyncio.Server.wait_closed()`
+  waits for every accepted connection's handler task to finish, not just
+  for `close()` itself — a just-closed session's background read loop
+  can take a beat to notice its socket died. `ConnectionManager.close_all()`
+  now bounds that wait with a 2s timeout instead of blocking indefinitely.
+- **Tests**: `tests/test_security_fixes.py`, `test_upgrade_fixes.py`,
+  `test_event_bus.py`, `test_stage2/3/4.py` updated for the new required
+  constructor args. The two BUG-017/018 raw-socket-injection tests in
+  `test_security_fixes.py` were rewritten: one now sends a malformed
+  dict through the real encrypted channel (`manager.send()` itself does
+  no schema validation, so this still reaches the receiver's
+  `validate_message()` exactly as before); the other hand-crafts a raw
+  encrypted non-dict-JSON frame via the session's own transport
+  primitives, since `EncryptedTransport.send_message()` now refuses to
+  put a non-dict on the wire at all through the normal send path — a
+  real, permanent fix for that specific bug shape, not just a
+  relocated test.
+- **Not part of this fix (deliberately out of scope):** migrating
+  `trust.db` into the encrypted vault (Phase 39.2, resuming next),
+  full trust approve/reject UI (Phase 36/37), and the
+  Rendezvous/"link add" endpoint model for internet (non-LAN) peers
+  discussed but deferred to Phase 44/45 (`docs/INTERNET_CONNECTIVITY_DESIGN.md`
+  §9-10) — today's fix only concerns the existing LAN ip:port model.
+
 ## [1.15.0] — Phase 39.1: Vault Envelope Encryption (Phase 39 begins)
 
 ### Added

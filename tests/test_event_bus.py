@@ -41,6 +41,7 @@ from core.security.events import (
 )
 import chat
 import file_transfer
+from core.identity.device_identity import generate_keypair
 from peer import ConnectionManager
 
 
@@ -260,8 +261,12 @@ async def test_event_bus_chat_and_connection_manager_integration():
     bus_a = EventBus()
     bus_b = EventBus()
 
-    manager_a = ConnectionManager(listen_port=port_a, event_bus=bus_a)
-    manager_b = ConnectionManager(listen_port=port_b, event_bus=bus_b)
+    manager_a = ConnectionManager(
+        listen_port=port_a, my_identity=generate_keypair(), my_name="A", event_bus=bus_a,
+    )
+    manager_b = ConnectionManager(
+        listen_port=port_b, my_identity=generate_keypair(), my_name="B", event_bus=bus_b,
+    )
 
     chat_a = chat.ChatSession(manager_a, event_bus=bus_a)
     chat_b = chat.ChatSession(manager_b, event_bus=bus_b)
@@ -308,8 +313,12 @@ async def test_event_bus_file_transfer_integration():
     bus_a = EventBus()
     bus_b = EventBus()
 
-    manager_a = ConnectionManager(listen_port=port_a, event_bus=bus_a)
-    manager_b = ConnectionManager(listen_port=port_b, event_bus=bus_b)
+    manager_a = ConnectionManager(
+        listen_port=port_a, my_identity=generate_keypair(), my_name="A", event_bus=bus_a,
+    )
+    manager_b = ConnectionManager(
+        listen_port=port_b, my_identity=generate_keypair(), my_name="B", event_bus=bus_b,
+    )
 
     temp_dir_a = tempfile.mkdtemp(prefix="peerc_bus_ft_a_")
     temp_dir_b = tempfile.mkdtemp(prefix="peerc_bus_ft_b_")

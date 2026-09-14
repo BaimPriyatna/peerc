@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **1.15.0** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.15.1** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
@@ -34,6 +34,7 @@ development into maintenance/updates, not before.
 | `1.13.1` | 5.2 | `MDNSDiscovery` + `_PeercServiceListener` in `discovery.py`: optional mDNS transport (`_peerc._tcp.local.`, key-value TXT record) via `zeroconf`; `MDNS_AVAILABLE` flag; shared `_handle_packet` path for both UDP and mDNS; `pip install peerc[mdns]` optional dep group |
 | `1.14.0` | 26 | `core/events.py` [NEW]: `EventBus`, typed events (`ChatReceived`, `FileOffered`, `FileProgress`, `TransferCompleted`, `PeerConnected`, `PeerDisconnected`, `TrustRequired`, `SecurityWarning`), security event bridge; resolved ARCH-001 (`on_message` chaining eliminated across `peer.py`, `chat.py`, `file_transfer.py`, `ui.py`) |
 | `1.15.0` | 39.1 | `core/vault/` [NEW]: DEK/KEK envelope encryption (`crypto.py` — Scrypt KDF + AES-256-GCM wrap/unwrap), `vault_keyfile.json` format + `create_vault`/`unlock_with_passphrase`/`unlock_with_recovery_code`/`change_passphrase` (`keyfile.py`), Crockford Base32 recovery code (`recovery_code.py`) |
+| `1.15.1` | BUG-004 | `peer.py`'s `ConnectionManager` wired to `core/transport`'s authenticated handshake + ChaCha20-Poly1305 (Phase 6-9 finally connected to the live app, not just unit-tested); `TrustStore` (Phase 4) constructed for real in `ui.py` for the first time; BUG-005/ARCH-002 closed alongside it (self-reported `peer_id` in `hello`/`chat` now cross-checked against the authenticated `device_id`) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -68,7 +69,7 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. **Phase 39 — Secure Storage** ← in progress (39.1 envelope encryption core done in `1.15.0`; 39.2 encrypted DB lifecycle next, will land as `1.15.1`)
+1. **Phase 39 — Secure Storage** ← in progress (39.1 envelope encryption core done in `1.15.0`; BUG-004 live secure transport landed as `1.15.1` — a needed prerequisite, since 39.2's persistence needs an authenticated device_id, which nothing in the live app had until now; 39.2 encrypted DB lifecycle next, will land as `1.15.2`)
 2. **Phase 42 — Group Authority System** (design-complete)
 3. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
 4. **Phase 44 — Internet P2P Connectivity** (design-complete)

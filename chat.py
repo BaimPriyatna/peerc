@@ -184,12 +184,13 @@ if __name__ == "__main__":
     #   python3 chat.py client 5555 <server-ip>
     import sys
 
-    import discovery as _discovery
+    import core.identity as identity
 
     async def _main() -> None:
         role = sys.argv[1]
         port = int(sys.argv[2])
-        peer_id, name = _discovery.load_or_create_identity()
+        dev_identity = identity.load_or_create_identity()
+        peer_id, name = dev_identity.device_id, dev_identity.name
 
         async def on_received(addr_key: str, message: dict) -> None:
             print(f"\n<{message['sender_name']}> {message['text']}")
@@ -198,7 +199,10 @@ if __name__ == "__main__":
             mark = "\u2713\u2713" if status == "delivered" else "\u2717"
             print(f"  [{mark} {status}] {message_id[:8]}")
 
-        manager = ConnectionManager(listen_port=port, on_message=None)
+        manager = ConnectionManager(
+            listen_port=port, my_identity=dev_identity.keypair, my_name=name,
+            on_message=None,
+        )
         chat = ChatSession(manager, on_chat_received=on_received, on_status_change=on_status)
         await manager.start_server()
         print(f"Listening on port {port} as {name} ({peer_id[:8]})")

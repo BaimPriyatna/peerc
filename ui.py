@@ -49,12 +49,14 @@ from core.events import (
     EventBus,
     NetworkMessageReceived,
     SecurityWarning,
+    TrustRequired,
     bridge_security_events,
 )
 import core.identity as identity
 import discovery
 import file_transfer
 import protocol
+from core.trust.store import TrustStore
 from peer import ConnectionManager
 
 UI_TCP_PORT = 5656
@@ -208,6 +210,8 @@ class ChatApp(App):
         self.peer_id: str = ""
         self.display_name: str = ""
         self.public_key_bytes: bytes = b""
+        self.my_identity = None  # DeviceKeypair, set in on_mount (BUG-004)
+        self.trust_store: Optional[TrustStore] = None
         self.registry: Optional[discovery.PeerRegistry] = None
         self.event_bus: Optional[EventBus] = None
         self._unhook_security_events = None
@@ -226,13 +230,16 @@ class ChatApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
-        self.peer_id, self.display_name = discovery.load_or_create_identity()
-        # Phase 5.1: discovery announces now carry the raw public key so
-        # peers can self-consistency-check device_id == sha256(public_key).
-        # load_or_create_identity() here just re-reads the already-created
-        # identity file (idempotent) — it's the key material discovery's
-        # older (peer_id, name)-only wrapper doesn't expose.
-        self.public_key_bytes = identity.load_or_create_identity().keypair.public_key_bytes()
+        # BUG-004 (v1.15.1): one identity load now covers everything —
+        # peer_id/display_name (as before), the raw public key (Phase
+        # 5.1, for discovery's self-consistency check), and the full
+        # DeviceKeypair (new) that ConnectionManager needs to perform a
+        # real authenticated handshake on every connection.
+        dev_identity = identity.load_or_create_identity()
+        self.peer_id = dev_identity.device_id
+        self.display_name = dev_identity.name
+        self.public_key_bytes = dev_identity.keypair.public_key_bytes()
+        self.my_identity = dev_identity.keypair
         self.title = f"peerc — {self.display_name} ({self.peer_id[:8]})"
 
         self.registry = discovery.PeerRegistry(
@@ -241,7 +248,20 @@ class ChatApp(App):
         self.event_bus = EventBus()
         self._unhook_security_events = bridge_security_events(self.event_bus)
 
-        self.manager = ConnectionManager(listen_port=UI_TCP_PORT, event_bus=self.event_bus)
+        # BUG-004 (v1.15.1): TrustStore finally wired into the live app —
+        # previously implemented (Phase 4) and unit-tested but never
+        # actually constructed here. Still its own plaintext ~/.peerc/
+        # trust.db for now; migrating it into the encrypted vault is
+        # Phase 39.2, not this bug fix.
+        self.trust_store = TrustStore()
+
+        self.manager = ConnectionManager(
+            listen_port=UI_TCP_PORT,
+            my_identity=self.my_identity,
+            my_name=self.display_name,
+            event_bus=self.event_bus,
+            trust_store=self.trust_store,
+        )
         self.chat_session = chat.ChatSession(
             self.manager,
             event_bus=self.event_bus,
@@ -260,6 +280,7 @@ class ChatApp(App):
         # Wire event bus subscribers
         self.event_bus.subscribe(NetworkMessageReceived, self._on_network_message_handshake)
         self.event_bus.subscribe(SecurityWarning, self._on_security_warning)
+        self.event_bus.subscribe(TrustRequired, self._on_trust_required)
 
         await self.manager.start_server()
         self._discovery = discovery.Discovery(
@@ -320,7 +341,7 @@ class ChatApp(App):
             peer_id = evt.message.get("peer_id", "")
             sender_name = evt.message.get("sender_name", ip)
             tcp_port = evt.message.get("tcp_port", UI_TCP_PORT)
-            if peer_id and peer_id != self.peer_id:
+            if peer_id and peer_id != self.peer_id and self._verify_self_reported_id(addr_key, peer_id):
                 self.registry.upsert(peer_id, sender_name, ip, tcp_port)
                 self._refresh_peer_list()
                 if self.active_peer_id is None:
@@ -331,16 +352,48 @@ class ChatApp(App):
             peer_id = evt.message.get("peer_id", "")
             sender_name = evt.message.get("sender_name", ip)
             tcp_port = evt.message.get("tcp_port", UI_TCP_PORT)
-            if peer_id and peer_id != self.peer_id:
+            if peer_id and peer_id != self.peer_id and self._verify_self_reported_id(addr_key, peer_id):
                 self.registry.upsert(peer_id, sender_name, ip, tcp_port)
                 self._refresh_peer_list()
                 if self.active_peer_id is None:
                     self.active_peer_id = peer_id
 
+    def _verify_self_reported_id(self, addr_key: str, claimed_peer_id: str) -> bool:
+        """BUG-005: hello/hello_ack/chat messages carry a self-reported
+        peer_id — before BUG-004, nothing proved the sender actually owned
+        that identity, so a peer could claim to be anyone and get written
+        straight into the registry. Now that every connection completed
+        an authenticated handshake (Phase 6), cross-check the claim
+        against the transport's own verified peer_device_id and refuse to
+        register anything that doesn't match, rather than trusting the
+        application-level message on its own."""
+        authenticated_id = self.manager.get_peer_device_id(addr_key)
+        if authenticated_id is None:
+            return False  # no active session for this addr_key at all
+        if claimed_peer_id != authenticated_id:
+            self._log(
+                f"[red][bold]SECURITY:[/bold] {addr_key} claimed peer_id "
+                f"{claimed_peer_id[:8]}... but its authenticated handshake identity "
+                f"is {authenticated_id[:8]}... — ignoring[/red]"
+            )
+            return False
+        return True
+
     def _on_security_warning(self, evt: SecurityWarning) -> None:
         peer_info = f" (peer {evt.peer_id[:8]})" if evt.peer_id else ""
         color = "red" if evt.severity in ("HIGH", "CRITICAL") else "yellow"
         self._log(f"[{color}][bold]SECURITY {evt.severity}:[/bold] {evt.event_type}{peer_info}[/{color}]")
+
+    def _on_trust_required(self, evt: TrustRequired) -> None:
+        # BUG-004: the connection is already allowed to proceed (handshake.py
+        # itself returns PENDING rather than rejecting) — this is a
+        # notification, not a gate. A real approve/reject flow is Phase
+        # 36/37, tracked separately in docs/ROADMAP.md; for now the user
+        # just sees that a new, not-yet-trusted device connected.
+        self._log(
+            f"[yellow]New device seen for the first time: [bold]{evt.peer_name}[/bold] "
+            f"({evt.peer_id[:8]}) — not yet trusted.[/yellow]"
+        )
 
     async def _prune_ui_loop(self) -> None:
         while True:
@@ -400,7 +453,7 @@ class ChatApp(App):
         text = message.get("text", "")
         self._last_received_msg = text
         ip = addr_key.rsplit(":", 1)[0]
-        if sender_id and sender_id != self.peer_id:
+        if sender_id and sender_id != self.peer_id and self._verify_self_reported_id(addr_key, sender_id):
             self.registry.upsert(sender_id, sender_name, ip, UI_TCP_PORT)
             self._refresh_peer_list()
             if self.active_peer_id is None:

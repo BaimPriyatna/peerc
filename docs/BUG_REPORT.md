@@ -31,7 +31,7 @@ Total: 29 issue.
 | BUG-001 Path traversal | ✅ Fixed — `_safe_dest_path()` di `file_transfer.py` |
 | BUG-002 File size DoS | ✅ Fixed — `MAX_INCOMING_FILE_SIZE` + per-chunk enforcement |
 | BUG-003 Identity masih UUID | ⏳ Belum — keputusan desain sudah final (Ed25519), implementasi belum jalan |
-| BUG-004 TCP plaintext | ⏳ Belum — butuh Phase 6–9 (handshake + session encryption) |
+| BUG-004 TCP plaintext | ✅ Fixed (v1.15.1) — ConnectionManager wired to core/transport's authenticated handshake + ChaCha20-Poly1305 |
 | BUG-005 Unauthenticated hello | ⏳ Belum — bagian dari BUG-003 |
 | BUG-006 Frame limit 100 MB | 🟡 Partial — limit khusus untuk `chat` sudah ada (64 KB); binary framing untuk file belum |
 | BUG-007 Base64 file transfer | ⏳ Belum |
@@ -170,7 +170,7 @@ Detail implementasi ada di `Implementation_plan.md` Phase 3.
 
 ---
 
-### BUG-004 — TCP Masih Plaintext ⏳ Belum
+### BUG-004 — TCP Masih Plaintext ✅ Fixed (v1.15.1)
 
 File: `peer.py`, `protocol.py`
 Severity: 🔴 Critical
@@ -204,9 +204,20 @@ ChaCha20-Poly1305
 encrypted session
 ```
 
+**Status:** Phase 6–9 sudah diimplementasikan dan diuji standalone sejak
+lama, tapi ternyata tidak pernah benar-benar disambungkan ke
+`ConnectionManager` yang jalan di app — celah ini baru ketahuan saat
+mengerjakan Phase 39.2 (persistence butuh device_id yang benar-benar
+terautentikasi, bukan sekadar field self-reported). `peer.py` sekarang
+memakai `core/transport`'s `initiate_secure_session`/`accept_secure_session`
+untuk setiap koneksi, masuk maupun keluar. `TrustStore` (Phase 4) ikut
+disambung live untuk pertama kalinya sekaligus (masih pakai `trust.db`
+plaintext-nya sendiri untuk saat ini — migrasi ke vault terenkripsi
+menyusul di Phase 39.2).
+
 ---
 
-### BUG-005 — Unauthenticated `hello` Dapat Memanipulasi Peer Registry ⏳ Belum
+### BUG-005 — Unauthenticated `hello` Dapat Memanipulasi Peer Registry ✅ Fixed (v1.15.1)
 
 File: `ui.py`
 Severity: 🔴 Critical
@@ -217,6 +228,13 @@ tersebut benar-benar memiliki identity tersebut.
 
 Bagian dari BUG-003 — akan tertutup sekaligus begitu authenticated handshake
 (Phase 6) jalan.
+
+**Status:** Tertutup bersamaan dengan BUG-004. `ui.py` sekarang
+cross-check setiap `peer_id` self-reported di pesan `hello`/`hello_ack`/
+`chat` terhadap `manager.get_peer_device_id(addr_key)` — identity yang
+sudah dibuktikan lewat handshake — sebelum menulisnya ke peer registry.
+Klaim yang tidak cocok ditolak dan dicatat sebagai peringatan keamanan
+di log, bukan langsung dipercaya.
 
 ---
 
@@ -494,11 +512,16 @@ sebelumnya. **Selesai di Phase 26 (v1.14.0)**: Digantikan oleh `EventBus` (`core
 dengan typed events (`NetworkMessageReceived`, `ChatReceived`, `FileOffered`, dll.).
 Chaining `on_message` dihapus sepenuhnya.
 
-### ARCH-002 — Identity Masih Berasal dari Payload
+### ARCH-002 — Identity Masih Berasal dari Payload [RESOLVED in v1.15.1 / BUG-004]
 
 Chat handler mengambil `sender_id`/`sender_name` dari `message` dan bahkan
 memasukkannya ke registry. Target: identity dari `session.device_id`
 (authenticated), bukan dari payload yang bisa dipalsukan.
+
+**Selesai bersamaan dengan BUG-004/BUG-005**: `ui.py` sekarang cross-check
+`peer_id`/`sender_id` self-reported di `hello`/`hello_ack`/`chat` terhadap
+`manager.get_peer_device_id(addr_key)` (`_verify_self_reported_id()`)
+sebelum menulis ke registry.
 
 ### ARCH-003 — UI Masih Terlalu Menjadi Orchestrator
 

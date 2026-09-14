@@ -11,6 +11,7 @@ Verifies:
 import asyncio
 
 import chat
+from core.identity.device_identity import generate_keypair
 from peer import ConnectionManager
 
 PORT_A = 7101
@@ -27,8 +28,12 @@ async def main() -> None:
     def on_status_a(message_id: str, status: str) -> None:
         status_events.append((message_id, status))
 
-    manager_a = ConnectionManager(listen_port=PORT_A, on_message=None)
-    manager_b = ConnectionManager(listen_port=PORT_B, on_message=None)
+    manager_a = ConnectionManager(
+        listen_port=PORT_A, my_identity=generate_keypair(), my_name="A", on_message=None,
+    )
+    manager_b = ConnectionManager(
+        listen_port=PORT_B, my_identity=generate_keypair(), my_name="B", on_message=None,
+    )
 
     chat_a = chat.ChatSession(manager_a, on_status_change=on_status_a)
     chat_b = chat.ChatSession(manager_b, on_chat_received=on_received_b)

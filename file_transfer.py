@@ -189,7 +189,8 @@ class FileTransferSession:
         )
 
         offer = protocol.make_file_offer(
-            transfer_id, sender_id="", sender_name="", filename=filename,
+            transfer_id, sender_id=self.manager.my_identity.device_id,
+            sender_name=self.manager.my_name, filename=filename,
             size=size, checksum=checksum,
         )
         ok = await self.manager.send(addr_key, offer)
