@@ -8,7 +8,7 @@
 [![Tests](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml/badge.svg)](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.15.1-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.15.2-informational.svg)](CHANGELOG.md)
 
 A terminal-based peer-to-peer chat and file transfer application. No central server — peers discover each other directly over the local network (LAN or WiFi hotspot) and communicate directly over encrypted TCP connections.
 
@@ -237,8 +237,7 @@ The full suite also runs automatically in CI on every push to `main`. See `.gith
 
 - Discovery via UDP broadcast does not work across WiFi access points that have AP isolation (client isolation) enabled. Use `/connect <ip>` to reach peers in that case.
 - No retry or queuing for messages sent while a peer is offline. The peer's IP may have changed before it reconnects.
-- No encrypted chat history or persistence between sessions (planned: Phase 39 Secure Storage).
-- No room or multi-party channel support — each conversation is one-to-one.
+- Room / multi-party channel support doesn't exist yet — each conversation is one-to-one (planned: Phase 42 Group Authority System).
 
 ---
 
@@ -246,12 +245,12 @@ The full suite also runs automatically in CI on every push to `main`. See `.gith
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for phased progress and [`CHANGELOG.md`](CHANGELOG.md) for a full version history.
 
-Current version: **1.15.1** — Discovery V2 (protocol fields + mDNS), Event
-Architecture (Phase 26), the first sub-step of Secure Storage (Phase
-39.1: vault envelope encryption), and BUG-004 (live authenticated,
-encrypted transport — every connection now does a real handshake
-instead of plaintext TCP) complete.  
-Next planned: Phase 39.2 (encrypted database lifecycle), Phase 42 (Group
+Current version: **1.15.2** — Discovery V2 (protocol fields + mDNS), Event
+Architecture (Phase 26), BUG-004 (live authenticated, encrypted
+transport), and Phase 39.1-39.2 of Secure Storage (vault envelope
+encryption + encrypted database with chat/transfer persistence) complete.
+Messages and file transfers are now saved locally, encrypted at rest.  
+Next planned: Phase 39.3 (session/auto-lock model), Phase 42 (Group
 Authority System).
 
 ---

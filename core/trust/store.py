@@ -70,18 +70,30 @@ class TrustDecision(str, enum.Enum):
 
 
 class TrustStore:
-    def __init__(self, db_path: str = DEFAULT_DB_PATH):
+    def __init__(self, db_path: str = DEFAULT_DB_PATH, conn: Optional[sqlite3.Connection] = None):
+        """conn, if given, is an already-open connection to share (Phase
+        39.2: the unified vault database) — db_path is ignored in that
+        case, and this instance does NOT own/close that connection; the
+        owner (e.g. VaultDatabase) is responsible for that. When conn is
+        None (the default, and every pre-Phase-39.2 call site), behavior
+        is unchanged: TrustStore opens and owns its own db_path file."""
         self.db_path = db_path
-        directory = os.path.dirname(db_path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        self._conn = sqlite3.connect(db_path)
+        if conn is not None:
+            self._conn = conn
+            self._owns_conn = False
+        else:
+            directory = os.path.dirname(db_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            self._conn = sqlite3.connect(db_path)
+            self._owns_conn = True
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
     def close(self) -> None:
-        self._conn.close()
+        if self._owns_conn:
+            self._conn.close()
 
     # ---- read -------------------------------------------------------
 

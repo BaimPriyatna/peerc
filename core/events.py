@@ -70,11 +70,28 @@ class ChatReceived(Event):
     """Fired when an incoming chat message is received and decrypted."""
 
     addr_key: str = ""
-    sender_id: str = ""
+    sender_id: str = ""       # self-reported, from the message payload — display only
     sender_name: str = ""
     text: str = ""
     message_id: str = ""
     raw_message: dict = field(default_factory=dict)
+    # Phase 39.2: the sender's device_id as verified by the transport's
+    # own handshake (BUG-004), NOT the message's self-reported sender_id
+    # above. This is what persistence should key rows on.
+    peer_device_id: Optional[str] = None
+
+
+@dataclass
+class ChatMessageSent(Event):
+    """Fired when an outgoing chat message is successfully handed to the
+    transport (Phase 39.2 — persistence needs the message's own text,
+    which ChatMessageStatusChanged below deliberately doesn't carry)."""
+
+    message_id: str = ""
+    addr_key: str = ""
+    peer_device_id: Optional[str] = None  # authenticated, via ConnectionManager.get_peer_device_id
+    text: str = ""
+    timestamp: float = 0.0
 
 
 @dataclass
@@ -123,6 +140,16 @@ class TransferCompleted(Event):
     success: bool = False
     filepath: Optional[str] = None
     error: Optional[str] = None
+    # Phase 39.2: enough to write a `transfers` row without a second
+    # lookup — filled in from the OutgoingTransfer/IncomingTransfer
+    # record that's already in hand wherever this is published.
+    addr_key: str = ""
+    peer_device_id: Optional[str] = None  # authenticated, via ConnectionManager.get_peer_device_id
+    direction: str = ""    # "sent" | "received"
+    filename: str = ""
+    size: int = 0
+    checksum: str = ""
+    timestamp: float = 0.0
 
 
 @dataclass

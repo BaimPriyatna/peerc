@@ -5,6 +5,87 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.15.2] — Phase 39.2: Encrypted database lifecycle + persistence
+
+### Added
+- **`core/vault/database.py`** [NEW]: `VaultDatabase` — the encrypted
+  database lifecycle from §5/§17. `unlock(dek, vault_db_path)` decrypts
+  the vault file (AES-256-GCM, key HKDF-derived from the DEK with a
+  domain-separation label distinct from the vault keyfile's own KEKs)
+  into a plaintext working copy, `flush()` re-encrypts it back
+  (write-temp-then-atomic-rename), `start_auto_flush(interval=30)` does
+  this periodically, `lock()` flushes once more and destroys the working
+  copy. Working copy lives on `/dev/shm` (RAM-backed) on Linux when
+  available; falls back to the OS temp dir otherwise with a best-effort
+  overwrite-before-delete on lock() — a real, documented gap versus the
+  Linux path, exercised in tests via `force_fallback=True` since actual
+  Windows/macOS hardware isn't available here.
+- Unified schema (§12): `trusted_devices` (Phase 4, schema unchanged),
+  `identity_transitions` (Phase 40, added after the design doc predates
+  it), `messages`, `transfers`, `settings` — one encrypted file instead
+  of running two separate encrypt/flush lifecycles in parallel.
+- **`core/vault/migration.py`** [NEW]: `migrate_plaintext_trust_db()` —
+  one-time copy of `trusted_devices`/`identity_transitions` rows from
+  the old plaintext `trust.db` into the vault, then deletes the old file
+  outright (no `.migrated` backup — no real users yet, per project
+  decision). No-op if the old file doesn't exist; handles pre-Phase-40
+  files that predate `identity_transitions` entirely.
+- **`core/trust/store.py`**: `TrustStore.__init__` gained an optional
+  `conn` parameter — when given an already-open connection (the vault's),
+  `TrustStore` operates directly on it instead of opening its own file,
+  and `close()` doesn't close a connection it doesn't own. Default
+  behavior (`conn=None`) is unchanged for every pre-existing call site.
+- **`core/vault/persistence.py`** [NEW]: `VaultPersistence` — subscribes
+  to `ChatReceived`/`ChatMessageSent`/`ChatMessageStatusChanged`/
+  `TransferCompleted` on the EventBus (Phase 26) and writes `messages`/
+  `transfers` rows. This is what actually "absorbs Phase 27" — no direct
+  DB calls from `chat.py`/`file_transfer.py` themselves. Rows are keyed
+  on each event's authenticated `peer_device_id` (from BUG-004's
+  handshake, via `ConnectionManager.get_peer_device_id()`), never a
+  self-reported field; an event with no authenticated device_id
+  available is skipped rather than persisted under a guess.
+- **`core/events.py`**: new `ChatMessageSent` event (outgoing messages
+  previously had no event carrying their own text). `ChatReceived` and
+  `TransferCompleted` gained a `peer_device_id` field alongside their
+  existing self-reported identity fields; `TransferCompleted` also
+  gained `direction`/`filename`/`size`/`checksum`/`addr_key`/`timestamp`
+  so persistence needs no second lookup.
+- **`chat.py`**: `send_chat()` now publishes `ChatMessageSent` after a
+  successful send; `_handle_incoming_chat()` populates the new
+  `peer_device_id` field on `ChatReceived`.
+- **`file_transfer.py`**: `_notify_complete()` now takes the transfer
+  object itself (not just its id) so it can populate the new
+  `TransferCompleted` fields; all 6 call sites updated.
+- **`ui.py`**: full vault unlock flow wired in via three new
+  `ModalScreen`s — `VaultCreateModal` (first run: passphrase + confirm,
+  validated locally before dismissing), `VaultRecoveryCodeModal` (shown
+  exactly once, right after creation), `VaultUnlockModal` (every run
+  after: passphrase, with a "use recovery code instead" toggle; wrong
+  attempts loop back with an inline error rather than crashing or
+  retrying silently). `_setup()` — the former body of `on_mount()` — is
+  now `@work`-decorated: Textual's `push_screen_wait()` (needed for
+  these modals) must run inside a worker, not directly in `on_mount`,
+  which headless testing (`App.run_test()` + `Pilot`) caught before it
+  became a runtime bug. `on_unmount()` locks the vault on exit.
+  `TrustStore` now shares the vault's own connection instead of opening
+  its separate plaintext file, and `migrate_plaintext_trust_db()` runs
+  once at startup before it's constructed.
+- **Tests**: `tests/test_vault_database.py` (10), `test_vault_persistence.py`
+  (7), `test_vault_trust_integration.py` (4) — 21 new automated tests.
+  The full `ui.py` vault modal flow (first-run create → recovery code →
+  main screen; second-run wrong-passphrase retry with inline error →
+  toggle to recovery-code mode → successful unlock; correct-passphrase
+  unlock on a subsequent run; vault data surviving a full lock/unlock
+  cycle) was verified headlessly via `App.run_test()`/`Pilot` — not
+  committed as a permanent test yet, since `ChatApp` doesn't currently
+  accept injectable paths and a reload-based workaround risked leaking
+  state into other tests; a proper version is a worthwhile follow-up,
+  not folded into this sub-step.
+- **Not part of this sub-step:** the session/auto-lock model (39.3),
+  the critical-action key for Export (39.4), file actions and secure-mode
+  storage — every transfer today persists with `storage_mode='normal'`
+  (39.5).
+
 ## [1.15.1] — BUG-004: Live secure transport integration
 
 ### Fixed

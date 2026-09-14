@@ -36,7 +36,7 @@ from typing import Optional
 
 from rich.markup import escape as rich_escape
 from rich.style import Style
-from textual import events
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
@@ -56,7 +56,21 @@ import core.identity as identity
 import discovery
 import file_transfer
 import protocol
+from core.trust.store import DEFAULT_DB_PATH as TRUST_DB_LEGACY_PATH
 from core.trust.store import TrustStore
+from core.vault import (
+    RecoveryCodeError,
+    VaultDatabase,
+    VaultExistsError,
+    VaultPersistence,
+    WrongSecretError,
+    create_vault,
+    load_vault_keyfile,
+    migrate_plaintext_trust_db,
+    unlock_with_passphrase,
+    unlock_with_recovery_code,
+    vault_exists,
+)
 from peer import ConnectionManager
 
 UI_TCP_PORT = 5656
@@ -158,6 +172,111 @@ def copy_to_system_clipboard(text: str) -> None:
             pass
 
 
+class VaultCreateModal(ModalScreen[str]):
+    """First-run only: choose a passphrase for the local vault. Validates
+    locally (match + minimum length) before ever dismissing — no need
+    for the caller to loop on this one, unlike VaultUnlockModal below."""
+
+    def __init__(self):
+        super().__init__()
+        self.error = ""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="vault-dialog"):
+            yield Label("🔐 Create your peerc vault")
+            yield Label(
+                "Choose a passphrase to protect your messages and files stored "
+                "locally on this device (at least 8 characters)."
+            )
+            yield Label("", id="vault-error")
+            yield Input(placeholder="Passphrase", password=True, id="pw1")
+            yield Input(placeholder="Confirm passphrase", password=True, id="pw2")
+            yield Button("Create Vault", id="create", variant="success")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "create":
+            self._submit()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._submit()
+
+    def _submit(self) -> None:
+        pw1 = self.query_one("#pw1", Input).value
+        pw2 = self.query_one("#pw2", Input).value
+        error_label = self.query_one("#vault-error", Label)
+        if pw1 != pw2:
+            error_label.update("Passphrases don't match.")
+            return
+        if len(pw1) < 8:
+            error_label.update("Passphrase must be at least 8 characters.")
+            return
+        self.dismiss(pw1)
+
+
+class VaultRecoveryCodeModal(ModalScreen[bool]):
+    """Shown exactly once, right after vault creation. The recovery code
+    is never shown again after this — losing both the passphrase and
+    this code means the vault's contents are unrecoverable."""
+
+    def __init__(self, recovery_code: str):
+        super().__init__()
+        self.recovery_code = recovery_code
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="vault-dialog"):
+            yield Label("⚠️  Save your recovery code")
+            yield Label(
+                "This is the only way back into your vault if you forget your "
+                "passphrase. It will not be shown again — write it down somewhere safe."
+            )
+            yield Label(self.recovery_code, id="recovery-code-text")
+            yield Button("I've saved it — Continue", id="continue", variant="warning")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "continue":
+            self.dismiss(True)
+
+
+class VaultUnlockModal(ModalScreen[tuple[str, str]]):
+    """Every run after the first: unlock with the passphrase, or fall
+    back to the recovery code. Just collects (mode, value) and dismisses
+    immediately — actually trying the unlock (and looping back here with
+    an error on failure) is the caller's job, since that requires the
+    keyfile this modal doesn't have."""
+
+    def __init__(self, error: str = ""):
+        super().__init__()
+        self.error = error
+        self.mode = "passphrase"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="vault-dialog"):
+            yield Label("🔒 Unlock your peerc vault")
+            yield Label(self.error, id="vault-error")
+            yield Input(placeholder="Passphrase", password=True, id="vault-input")
+            with Horizontal():
+                yield Button("Unlock", id="unlock", variant="success")
+                yield Button("Use recovery code instead", id="toggle-mode")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "toggle-mode":
+            self.mode = "recovery" if self.mode == "passphrase" else "passphrase"
+            input_widget = self.query_one("#vault-input", Input)
+            input_widget.password = self.mode == "passphrase"
+            input_widget.placeholder = (
+                "Passphrase" if self.mode == "passphrase" else "Recovery code (e.g. XXXXX-XXXXX-...)"
+            )
+            event.button.label = (
+                "Use passphrase instead" if self.mode == "recovery" else "Use recovery code instead"
+            )
+            return
+        if event.button.id == "unlock":
+            self.dismiss((self.mode, self.query_one("#vault-input", Input).value))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss((self.mode, event.value))
+
+
 class FileOfferModal(ModalScreen[bool]):
     """Blocking prompt shown when a peer offers to send us a file."""
 
@@ -193,6 +312,24 @@ class ChatApp(App):
         width: 60;
         height: auto;
     }
+    #vault-dialog {
+        align: center middle;
+        background: $panel;
+        border: thick $accent;
+        padding: 1 2;
+        width: 70;
+        height: auto;
+    }
+    #vault-dialog Input { margin-top: 1; }
+    #vault-dialog Button { margin-top: 1; }
+    #vault-error { color: $error; }
+    #recovery-code-text {
+        margin: 1 0;
+        padding: 1;
+        border: solid $warning;
+        text-align: center;
+        text-style: bold;
+    }
     Screen > .screen--selection {
         background: $primary;
         color: $text;
@@ -212,6 +349,8 @@ class ChatApp(App):
         self.public_key_bytes: bytes = b""
         self.my_identity = None  # DeviceKeypair, set in on_mount (BUG-004)
         self.trust_store: Optional[TrustStore] = None
+        self.vault_db = None  # VaultDatabase, set in on_mount (Phase 39.2)
+        self.vault_persistence = None  # VaultPersistence, set in on_mount (Phase 39.2)
         self.registry: Optional[discovery.PeerRegistry] = None
         self.event_bus: Optional[EventBus] = None
         self._unhook_security_events = None
@@ -230,6 +369,13 @@ class ChatApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        # push_screen_wait() (used for the vault-unlock modals below)
+        # must run inside a Textual worker, not directly in on_mount —
+        # _setup() below is @work-decorated for exactly that reason.
+        self._setup()
+
+    @work
+    async def _setup(self) -> None:
         # BUG-004 (v1.15.1): one identity load now covers everything —
         # peer_id/display_name (as before), the raw public key (Phase
         # 5.1, for discovery's self-consistency check), and the full
@@ -248,12 +394,22 @@ class ChatApp(App):
         self.event_bus = EventBus()
         self._unhook_security_events = bridge_security_events(self.event_bus)
 
-        # BUG-004 (v1.15.1): TrustStore finally wired into the live app —
-        # previously implemented (Phase 4) and unit-tested but never
-        # actually constructed here. Still its own plaintext ~/.peerc/
-        # trust.db for now; migrating it into the encrypted vault is
-        # Phase 39.2, not this bug fix.
-        self.trust_store = TrustStore()
+        # Phase 39.2: unlock (or first-time create) the encrypted vault
+        # before anything that needs to read/write persisted state.
+        dek = await self._unlock_vault()
+        self.vault_db = VaultDatabase.unlock(dek)
+        migrated = migrate_plaintext_trust_db(self.vault_db, TRUST_DB_LEGACY_PATH)
+        if migrated:
+            log = self.query_one("#chat-log", SelectableRichLog)
+            log.write(f"[dim]Migrated {migrated} trusted device(s) into the encrypted vault.[/dim]")
+        await self.vault_db.start_auto_flush()
+
+        # BUG-004 (v1.15.1) / Phase 39.2: TrustStore now shares the
+        # vault's own connection — its trusted_devices/identity_transitions
+        # rows live inside the encrypted vault file, not a separate
+        # plaintext trust.db (which migrate_plaintext_trust_db() above
+        # just retired if one existed).
+        self.trust_store = TrustStore(conn=self.vault_db.conn)
 
         self.manager = ConnectionManager(
             listen_port=UI_TCP_PORT,
@@ -277,6 +433,11 @@ class ChatApp(App):
             on_complete=self._on_transfer_complete,
         )
 
+        # Phase 39.2: subscribes itself to ChatReceived/ChatMessageSent/
+        # ChatMessageStatusChanged/TransferCompleted and writes rows into
+        # the vault — this is what "absorbs Phase 27" for real.
+        self.vault_persistence = VaultPersistence(self.vault_db, self.event_bus)
+
         # Wire event bus subscribers
         self.event_bus.subscribe(NetworkMessageReceived, self._on_network_message_handshake)
         self.event_bus.subscribe(SecurityWarning, self._on_security_warning)
@@ -294,6 +455,46 @@ class ChatApp(App):
         log.write(f"[bold cyan]Started as {self.display_name} ({self.peer_id[:8]})[/bold cyan]")
         log.write("Waiting for peers... use [bold yellow]/help[/bold yellow] for commands.")
         log.write("[dim]Tip: Drag mouse over text to block/select. Press Ctrl+C or Ctrl+Shift+C to copy. Press Ctrl+Q to quit.[/dim]")
+
+    async def _unlock_vault(self) -> bytes:
+        """Phase 39.2: first-run vault creation, or unlock on every run
+        after that. Returns the DEK. Blocks the rest of on_mount via the
+        modal screens above — nothing that needs persisted state should
+        run before this resolves."""
+        if not vault_exists():
+            passphrase = await self.push_screen_wait(VaultCreateModal())
+            try:
+                keyfile, recovery_code = create_vault(passphrase, device_name=self.display_name)
+            except VaultExistsError:
+                # Lost a race with another peerc instance creating it
+                # first — fall through to the normal unlock path below.
+                keyfile = load_vault_keyfile()
+                return await self._unlock_vault_loop(keyfile)
+            await self.push_screen_wait(VaultRecoveryCodeModal(recovery_code))
+            return unlock_with_passphrase(keyfile, passphrase)
+
+        keyfile = load_vault_keyfile()
+        return await self._unlock_vault_loop(keyfile)
+
+    async def _unlock_vault_loop(self, keyfile) -> bytes:
+        error = ""
+        while True:
+            mode, value = await self.push_screen_wait(VaultUnlockModal(error=error))
+            try:
+                if mode == "passphrase":
+                    return unlock_with_passphrase(keyfile, value)
+                return unlock_with_recovery_code(keyfile, value)
+            except WrongSecretError:
+                error = "Incorrect passphrase or recovery code — try again."
+            except RecoveryCodeError:
+                error = "That doesn't look like a valid recovery code — try again."
+
+    def on_unmount(self) -> None:
+        # Phase 39.2: flush and destroy the plaintext working copy on
+        # exit — leaving it around defeats the point of the whole
+        # unlock/lock lifecycle.
+        if self.vault_db is not None:
+            self.vault_db.lock()
 
     def copy_to_clipboard(self, text: str) -> None:
         """Copy text to clipboard using terminal escape sequences and system tools."""

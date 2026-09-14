@@ -156,23 +156,31 @@ class FileTransferSession:
 
     def _notify_complete(
         self,
-        transfer_id: str,
+        transfer,  # OutgoingTransfer | IncomingTransfer
         success: bool,
         filepath: Optional[str] = None,
         error: Optional[str] = None,
     ) -> None:
         if self.event_bus:
             from core.events import TransferCompleted
+            is_outgoing = isinstance(transfer, OutgoingTransfer)
             self.event_bus.post(
                 TransferCompleted(
-                    transfer_id=transfer_id,
+                    transfer_id=transfer.transfer_id,
                     success=success,
                     filepath=filepath,
                     error=error,
+                    addr_key=transfer.addr_key,
+                    peer_device_id=self.manager.get_peer_device_id(transfer.addr_key),
+                    direction="sent" if is_outgoing else "received",
+                    filename=transfer.filename,
+                    size=transfer.size,
+                    checksum=transfer.checksum if is_outgoing else transfer.expected_checksum,
+                    timestamp=time.time(),
                 )
             )
         if self.on_complete:
-            self.on_complete(transfer_id, success, filepath)
+            self.on_complete(transfer.transfer_id, success, filepath)
 
     # ---- Sender side -------------------------------------------------
 
@@ -212,7 +220,7 @@ class FileTransferSession:
         if transfer is None:
             return
         transfer.status = "rejected"
-        self._notify_complete(transfer.transfer_id, False, None, error="rejected")
+        self._notify_complete(transfer, False, None, error="rejected")
         self._outgoing.pop(transfer.transfer_id, None)
 
     async def _send_chunks(self, transfer: OutgoingTransfer) -> None:
@@ -223,7 +231,7 @@ class FileTransferSession:
                 ok = await self.manager.send_binary(transfer.addr_key, payload)
                 if not ok:
                     transfer.status = "failed"
-                    self._notify_complete(transfer.transfer_id, False, None, error="send_failed")
+                    self._notify_complete(transfer, False, None, error="send_failed")
                     return
                 bytes_sent += len(chunk)
                 self._notify_progress(transfer.transfer_id, bytes_sent, transfer.size, is_upload=True)
@@ -240,14 +248,14 @@ class FileTransferSession:
 
             transfer.status = "done" if success else "failed"
             self._notify_complete(
-                transfer.transfer_id,
+                transfer,
                 success,
                 transfer.filepath if success else None,
                 error=None if success else "ack_failed_or_timeout",
             )
         except OSError:
             transfer.status = "failed"
-            self._notify_complete(transfer.transfer_id, False, None, error="os_error")
+            self._notify_complete(transfer, False, None, error="os_error")
         finally:
             self._outgoing.pop(transfer.transfer_id, None)
 
@@ -374,7 +382,7 @@ class FileTransferSession:
             transfer.addr_key,
             protocol.make_file_complete_ack(transfer.transfer_id, False, reason),
         )
-        self._notify_complete(transfer.transfer_id, False, None, error=reason)
+        self._notify_complete(transfer, False, None, error=reason)
 
     async def _handle_done(self, addr_key: str, message: dict) -> None:
         transfer = self._incoming.pop(message["transfer_id"], None)
@@ -396,11 +404,11 @@ class FileTransferSession:
         if not success:
             transfer.status = "failed"
             cleanup_part_file(transfer.part_path)
-            self._notify_complete(transfer.transfer_id, False, None, error="checksum_mismatch")
+            self._notify_complete(transfer, False, None, error="checksum_mismatch")
             return
 
         # Atomically rename .part to final dest_path
         finalize_part_file(transfer.part_path, transfer.dest_path)
 
         transfer.status = "done"
-        self._notify_complete(transfer.transfer_id, True, transfer.dest_path)
+        self._notify_complete(transfer, True, transfer.dest_path)

@@ -1,6 +1,7 @@
 """core — Core functionality for peerc."""
 
 from core.events import (
+    ChatMessageSent,
     ChatMessageStatusChanged,
     ChatReceived,
     Event,
@@ -20,6 +21,7 @@ __all__ = [
     "Event",
     "EventBus",
     "ChatReceived",
+    "ChatMessageSent",
     "ChatMessageStatusChanged",
     "FileOffered",
     "FileProgress",

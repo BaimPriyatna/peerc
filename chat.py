@@ -91,6 +91,7 @@ class ChatSession:
                     text=message.get("text", ""),
                     message_id=message.get("message_id", ""),
                     raw_message=message,
+                    peer_device_id=self.manager.get_peer_device_id(addr_key),
                 )
             )
 
@@ -164,6 +165,18 @@ class ChatSession:
             self._pending.pop(message_id, None)
             self._notify_status(message_id, "failed", addr_key)
             return message_id
+
+        if self.event_bus:
+            from core.events import ChatMessageSent
+            self.event_bus.post(
+                ChatMessageSent(
+                    message_id=message_id,
+                    addr_key=addr_key,
+                    peer_device_id=self.manager.get_peer_device_id(addr_key),
+                    text=text,
+                    timestamp=time.time(),
+                )
+            )
 
         if message_id not in self._pending:
             # Already resolved (e.g. an ack raced in while send() was still

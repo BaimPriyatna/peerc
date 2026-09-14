@@ -7,7 +7,6 @@ keyfile format, §14 passphrase requirements, §15 recovery code format,
 §16 nonce management).
 
 Not yet implemented here (later Phase 39 sub-steps):
-  - the encrypted database lifecycle, tmpfs unlock/flush/lock (39.2)
   - the session/auto-lock model (39.3)
   - the critical-action key for Export, AND-gate HKDF combining (39.4)
   - file actions: Open/Export/Move-to-Secure/Delete, magic-byte
@@ -15,6 +14,12 @@ Not yet implemented here (later Phase 39 sub-steps):
 """
 
 from .crypto import VaultCryptoError, WrongSecretError
+from .database import (
+    DEFAULT_VAULT_DB_PATH,
+    VaultCorruptError,
+    VaultDatabase,
+    VaultDatabaseError,
+)
 from .keyfile import (
     DEFAULT_VAULT_DIR,
     DEFAULT_VAULT_KEYFILE,
@@ -32,11 +37,19 @@ from .keyfile import (
     validate_passphrase,
     vault_exists,
 )
+from .migration import migrate_plaintext_trust_db
+from .persistence import VaultPersistence
 from .recovery_code import RecoveryCodeError, generate_recovery_code, normalize_recovery_code
 
 __all__ = [
     "VaultCryptoError",
     "WrongSecretError",
+    "VaultDatabase",
+    "VaultDatabaseError",
+    "VaultCorruptError",
+    "DEFAULT_VAULT_DB_PATH",
+    "migrate_plaintext_trust_db",
+    "VaultPersistence",
     "VaultError",
     "VaultExistsError",
     "VaultKeyfile",
