@@ -63,6 +63,99 @@ Endpoint hanya digunakan untuk mencoba menemukan jalur komunikasi.
 
 ---
 
+## 3a. Link Format (Add-by-Link)
+
+Cara manual untuk menambahkan peer via internet, tanpa bergantung pada
+Rendezvous (Phase 45) sudah berjalan — dikirim lewat jalur apa pun yang
+sudah dipercaya (WhatsApp, email, dll). Keputusan final dari diskusi:
+
+**Bentuk**: string yang bisa di-copy-paste, dilindungi PIN 6 digit
+(bukan QR-only) — QR adalah cara render tambahan dari string yang sama,
+bukan encoding terpisah.
+
+```
+PEERC1:<base64url(salt || nonce || ciphertext)>
+```
+
+| # | Field | Lokasi | Ukuran | Keterangan |
+|---|---|---|---|---|
+| 1 | `PEERC1:` | plaintext (prefix) | 7 char | Penanda versi format; dicek sebelum parse base64 |
+| 2 | `salt` | plaintext | 16 byte | Input Scrypt(PIN, salt) → KEK. Wajib random per-link — PIN 6 digit cuma 1 juta kemungkinan; salt tetap/predictable = precompute sekali, bobol semua link selamanya |
+| 3 | `nonce` | plaintext | 12 byte | Nonce AES-256-GCM (standar AEAD, publik) |
+| 4 | `public_key` | **terenkripsi** | 32 byte | Ed25519 public key pengirim; `device_id` diturunkan dari ini setelah verifikasi (bukan disimpan terpisah) |
+| 5 | `endpoints[]` | **terenkripsi** | ~14-40 byte | Tagged `direct-v4` / `direct-v6` / `rendezvous`; boleh lebih dari satu sekaligus — direct dicoba dulu (cepat), rendezvous jadi fallback kalau direct gagal (reuse pola §11 Try Direct → Relay, diterapkan di level endpoint resolution) |
+| 6 | `created_at` | **terenkripsi** | 4 byte | Informasional untuk UI ("link dibuat 3 hari lalu") — bukan expiry |
+| 7 | `signature` | **terenkripsi** | 64 byte | Ed25519 signature atas field 4-6, ditandatangani device pengirim |
+| — | GCM tag | menempel di akhir ciphertext | 16 byte | Auth tag AES-256-GCM |
+
+Total mentah ±169 byte → **±233 karakter** (prefix + base64url).
+
+**Urutan kriptografi: Sign-then-Encrypt** (payload ditandatangani dulu,
+baru seluruh hasil dienkripsi) — bukan Encrypt-then-Sign. Alasan:
+- Tanpa PIN, penyerang tidak bisa melihat apa pun (device_id, endpoint,
+  signature) — Encrypt-then-Sign mengharuskan `public_key` bocor di luar
+  enkripsi supaya signature bisa diverifikasi tanpa PIN, yang justru
+  membocorkan identitas device ke siapa pun yang sekadar melihat link.
+- AES-GCM sudah menjamin integritas ciphertext duluan (tamper = gagal
+  decrypt) sebelum signature sempat diperiksa.
+- Signature baru benar-benar berguna di skenario **PIN berhasil
+  ditebak/dibrute-force** (realistis untuk ruang 6 digit meski
+  diperlambat Scrypt) — tanpa signature, penyerang yang sudah pegang PIN
+  bisa membuat link palsu (public_key & endpoint miliknya sendiri) yang
+  terlihat 100% sah. Dengan signature, link palsu itu tetap gagal
+  verifikasi karena penyerang tidak punya private key aslinya.
+
+**Expiry**: sengaja tidak ada. Link tetap valid selama endpoint belum
+berubah; begitu berubah, mekanisme Endpoint Update (§4, signed
+announcement) otomatis memperbaruinya tanpa perlu link baru — asal
+minimal satu kontak berhasil terjadi sebelum kedua sisi sama-sama
+offline dan berganti IP bersamaan (§8, satu-satunya kondisi yang
+membuat link benar-benar basi).
+
+**Approval**: link bukan kunci masuk otomatis. Setelah koneksi berhasil
+(endpoint ditemukan + identity terverifikasi via signature link ini +
+handshake Phase 6), approval tetap manual di sisi pemilik link — link
+hanya menyelesaikan masalah *penemuan + pembuktian identitas*, bukan
+trust.
+
+**Alternatif yang dipertimbangkan dan ditolak**:
+- Target 64 karakter tanpa mengurangi informasi — **tidak memungkinkan**
+  secara matematis. Signature Ed25519 (64 byte) sendirian sudah melebihi
+  budget 48 byte yang tersedia di 64 karakter base64. Versi paling
+  kompak yang masih menyertakan signature penuh (salt+nonce digabung
+  jadi satu blok dual-purpose, endpoint tanpa port kalau pakai default,
+  tanpa `created_at`) mentok di ±184 karakter, bukan 64.
+  Skema signature lebih pendek (mis. BLS, ~48 byte via pairing curve)
+  ditolak karena menambah dependency kripto baru di luar stack yang
+  sudah dipakai project ini (Ed25519/X25519/ChaCha20-Poly1305 via
+  `cryptography`), untuk penghematan yang tidak signifikan.
+- 64 karakter tanpa signature — ditolak. Selisih 64 vs ±233 karakter
+  tidak berdampak nyata ke UX (link dipakai lewat copy-paste, bukan
+  diketik manual — yang diketik manual cuma PIN 6 digit), sementara
+  signature adalah satu-satunya pengaman yang tersisa jika PIN berhasil
+  dibobol.
+
+**QR code**: hanya sebagai cara render tambahan dari string di atas,
+bukan encoding terpisah.
+- **Generate** (wajib): ASCII/ANSI QR langsung di terminal (library
+  `qrcode`), dan/atau export ke file `.png` untuk dikirim lewat
+  WA/email. String tidak lolos QR Alphanumeric mode (base64url pakai
+  huruf kecil) — pakai Byte mode, butuh QR version ±10-12, masih mudah
+  di-scan kamera HP biasa.
+- **Decode** (nice-to-have, belum diprioritaskan): dari file gambar
+  (`pyzbar`, tanpa kamera aktif) — bukan live scanning.
+- **Live camera scan via web** (dipertimbangkan, ditolak untuk
+  sekarang): ide-nya peerc buka HTTP server LAN sementara + halaman
+  browser HP untuk scan kamera lalu POST hasilnya balik ke peerc.
+  Blocker nyata: browser modern menolak akses kamera (`getUserMedia`)
+  di luar HTTPS/localhost — `http://<lan-ip>:<port>/...` akan ditolak,
+  butuh sertifikat TLS (self-signed = warning "Not Secure" di HP orang)
+  untuk UX yang justru ingin dibikin mulus. Dicatat sebagai ide masa
+  depan **kalau/ketika ada aplikasi GUI** (bukan TUI) — di situ live
+  camera scan native jauh lebih masuk akal daripada lewat browser.
+
+---
+
 ## 4. Endpoint Update
 
 Ketika IP berubah:
