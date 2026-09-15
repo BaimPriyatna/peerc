@@ -78,9 +78,22 @@ async def test_tcp_connection_loopback_frames():
 
 
 @pytest.mark.asyncio
-async def test_tcp_connection_connect_timeout():
-    """Verify open_tcp_connection raises ConnectTimeoutError on unreachable target."""
-    # Use a non-routable IP (TEST-NET-1) to trigger timeout
+async def test_tcp_connection_connect_timeout(monkeypatch):
+    """Verify open_tcp_connection raises ConnectTimeoutError on unreachable target.
+
+    Mocks asyncio.open_connection to hang rather than relying on a
+    non-routable IP (192.0.2.1) actually timing out — that depends on
+    network/sandbox behavior (some environments return
+    ConnectionRefusedError immediately instead of hanging), so it isn't
+    deterministic across environments.
+    """
+    import core.transport.tcp as tcp_module
+
+    async def _hang(*args, **kwargs):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(tcp_module.asyncio, "open_connection", _hang)
+
     with pytest.raises(ConnectTimeoutError):
         await open_tcp_connection("192.0.2.1", 12345, timeout=0.1)
 

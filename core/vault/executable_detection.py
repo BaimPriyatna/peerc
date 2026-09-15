@@ -51,7 +51,7 @@ EXECUTABLE_EXTENSIONS = {
     # macOS
     ".app", ".command",
     # Binary/library
-    ".so", ".dylib", ".bin", ".run",
+    ".so", ".dylib", ".run",
 }
 
 # Maximum bytes to read for magic-byte detection
@@ -83,21 +83,23 @@ def is_executable(file_path: str, strict: bool = True) -> bool:
     extension_suspicious = _check_extension(file_path)
     
     # Decision logic (§11.6):
-    # 1. If content is definitely executable → block
-    # 2. If content is inconclusive AND extension is suspicious → block (strict)
-    # 3. If both are clean → allow
+    # 1. Content positively executable → always block.
+    # 2. Content inconclusive → strict mode fails closed regardless of
+    #    extension; non-strict mode blocks only if the extension is
+    #    also suspicious.
+    # 3. Content positively "safe" (text/known format) but the extension
+    #    disagrees (e.g. a .exe that's actually plain text, or a .py
+    #    with no shebang) → still block; a mismatch is itself suspicious.
     
     if content_executable is True:
         return True  # definitely executable
     
     if content_executable is None:  # inconclusive
-        if strict and extension_suspicious:
-            return True  # fail closed
+        return True if strict else extension_suspicious
     
-    if extension_suspicious and not strict:
-        return True  # non-strict: extension alone is enough
-    
-    return False
+    # content_executable is False: positively identified as safe —
+    # only the extension mismatch can still flag it.
+    return extension_suspicious
 
 
 def check_executable_for_open(file_path: str) -> None:

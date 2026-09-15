@@ -24,6 +24,7 @@ from .secure_file import (
     encrypt_file,
     load_metadata,
 )
+from .executable_detection import ExecutableDetectionError, describe_file_type
 from .session import SessionLockedError, VaultSession
 
 
@@ -57,7 +58,9 @@ def open_secure_file(
         session: Active VaultSession (must be unlocked)
         temp_dir: Where to write the decrypted temp file (None = system temp)
         executable_checker: Optional callable(file_path) that raises
-            ExecutableBlockedError if the file should not be opened
+            ExecutableBlockedError or ExecutableDetectionError if the
+            file should not be opened (either is normalized to
+            ExecutableBlockedError below)
     
     Returns:
         (temp_file_path, metadata) — caller is responsible for cleanup
@@ -104,10 +107,24 @@ def open_secure_file(
     if executable_checker is not None:
         try:
             executable_checker(temp_path)
-        except ExecutableBlockedError:
-            # Clean up temp file before re-raising
+        except (ExecutableBlockedError, ExecutableDetectionError) as e:
+            # Describe the detected type *before* deleting the temp file —
+            # callers (e.g. ui.py) can't inspect the file themselves once
+            # it's gone, since the temp_path/metadata tuple this function
+            # would have returned is never bound on the caller's side when
+            # this function raises instead of returning.
+            detected_type = describe_file_type(temp_path)
+            # Clean up temp file before re-raising. Checkers may raise either
+            # ExecutableBlockedError (this module's contract) or
+            # ExecutableDetectionError (raised by check_executable_for_open,
+            # the checker actually wired up in ui.py) — normalize to
+            # ExecutableBlockedError either way so callers only need to
+            # handle one exception type.
             _secure_delete_temp(temp_path)
-            raise
+            message = f"{e} (Detected as: {detected_type})"
+            if isinstance(e, ExecutableBlockedError):
+                raise ExecutableBlockedError(message) from None
+            raise ExecutableBlockedError(message) from e
     
     return temp_path, metadata
 

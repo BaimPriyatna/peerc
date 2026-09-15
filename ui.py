@@ -773,7 +773,6 @@ class ChatApp(App):
             open_secure_file,
             check_executable_for_open,
             ExecutableBlockedError,
-            describe_file_type,
         )
         
         # Find matching secure_id (allow prefix match)
@@ -810,9 +809,11 @@ class ChatApp(App):
                 subprocess.Popen(["xdg-open", temp_path])
                 
         except ExecutableBlockedError as e:
-            file_type = describe_file_type(temp_path) if 'temp_path' in locals() else "unknown"
+            # The detected-type info is now embedded in the exception
+            # message itself (file_actions.open_secure_file deletes the
+            # temp file before this handler runs, so it can't be
+            # inspected here — see file_actions.py for details).
             self._log(f"[red]✗ Open blocked: {e}[/red]")
-            self._log(f"[yellow]Detected as: {file_type}[/yellow]")
             self._log("[yellow]Use /export if you need this file outside secure storage.[/yellow]")
         except Exception as e:
             self._log(f"[red]Error opening file: {e}[/red]")

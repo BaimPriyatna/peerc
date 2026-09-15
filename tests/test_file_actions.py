@@ -75,6 +75,10 @@ def test_open_secure_file_decrypts_to_temp(tmp_path, vault_session):
     
     metadata = encrypt_file(str(plaintext), str(secure_dir), dek)
     
+    # Open re-prompts every time by default (§4); bypass for this test
+    # since re-auth flow is covered separately.
+    vault_session.set_dont_ask_again_files(True)
+    
     # Open it
     temp_path, meta_restored = open_secure_file(
         metadata.secure_id,
@@ -98,6 +102,10 @@ def test_open_secure_file_with_executable_checker(tmp_path, vault_session):
     dek = vault_session.dek_bytes()
     
     metadata = encrypt_file(str(plaintext), str(secure_dir), dek)
+    
+    # Open re-prompts every time by default (§4); bypass for this test
+    # since re-auth flow is covered separately.
+    vault_session.set_dont_ask_again_files(True)
     
     from core.vault.executable_detection import check_executable_for_open
     

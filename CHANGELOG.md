@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.15.6] — Bug fixes: executable detection & Open-block wiring
+
+### Fixed
+- **`core/vault/executable_detection.py`**: `is_executable()` fail-closed logic corrected. Previously, inconclusive content (`None`) in strict mode only blocked if the extension was *also* suspicious, letting genuinely unknown files with non-suspicious extensions through; strict mode now always fails closed on inconclusive content. Also, "safe" content (e.g. plain text) with a suspicious extension (e.g. `.exe`, `.py`) was previously never flagged; content/extension mismatches are now caught. Removed `.bin` from `EXECUTABLE_EXTENSIONS` (too ambiguous — used for arbitrary binary blobs, not typically directly executed).
+- **`core/vault/file_actions.py`**: `open_secure_file()`'s executable-check `except` clause only caught `ExecutableBlockedError`, but the checker actually wired up in `ui.py` (`check_executable_for_open`) raises `ExecutableDetectionError` — a different, unrelated exception class. This meant blocked opens never cleaned up their decrypted temp file, and `ui.py`'s block-message handler never fired. Now catches both exception types and normalizes to `ExecutableBlockedError`. Detected file type is now computed and embedded in the exception message *before* the temp file is deleted (previously `ui.py` tried to inspect the file after deletion, which silently always reported "unknown").
+- **`ui.py`**: removed the now-redundant post-deletion `describe_file_type()` call in the Open-blocked handler.
+- **`tests/test_file_actions.py`**: two tests were missing `set_dont_ask_again_files(True)` before calling `open_secure_file()`, so they were unintentionally exercising the re-auth-required path (§4) instead of the decrypt/executable-check path they were meant to test.
+- **`tests/test_transport.py`**: the connect-timeout test relied on `192.0.2.1` actually timing out, which isn't guaranteed across network environments (some sandboxes return `ConnectionRefusedError` immediately instead of hanging). Now mocks `asyncio.open_connection` to hang, making the test deterministic.
+
 ## [1.15.5] — Phase 39.5: File actions / secure storage
 
 ### Added
