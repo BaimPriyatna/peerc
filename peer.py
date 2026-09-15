@@ -112,13 +112,17 @@ class ConnectionManager:
                 my_name=self.my_name,
                 trust_store=self.trust_store,
             )
-        except (HandshakeError, TransportError, asyncio.TimeoutError, OSError):
+        except (HandshakeError, TransportError, asyncio.TimeoutError, OSError, RuntimeError):
             # Failed handshakes for security-relevant reasons (identity
             # mismatch, REVOKED device, bad signature, replay) already
             # emit a SecurityEvent from inside handshake.py/TrustStore
             # itself (Phase 41) — the app-level SecurityWarning bridge
-            # (bridge_security_events in ui.py) surfaces those. Nothing
-            # further to publish here; just clean up the raw socket.
+            # (bridge_security_events in ui.py) surfaces those.
+            # RuntimeError covers Phase 39.3: TrustStore detached while
+            # the vault is hard-locked (no live conn) — fail closed on
+            # new handshakes until re-unlock, without crashing the
+            # accept loop. Nothing further to publish here; just clean
+            # up the raw socket.
             try:
                 writer.close()
                 await writer.wait_closed()

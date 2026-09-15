@@ -88,17 +88,36 @@ class TrustStore:
             self._conn = sqlite3.connect(db_path)
             self._owns_conn = True
         self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        self._require_conn().executescript(_SCHEMA)
+        self._require_conn().commit()
 
     def close(self) -> None:
-        if self._owns_conn:
+        if self._owns_conn and self._conn is not None:
             self._conn.close()
+            self._conn = None
+
+    def adopt_conn(self, conn: Optional[sqlite3.Connection]) -> None:
+        """Phase 39.3: swap onto a new shared vault connection after a
+        session re-unlock (or detach with conn=None while the vault is
+        locked). Never closes a connection we don't own. After detach,
+        read/write methods raise RuntimeError until a live conn returns.
+        """
+        if self._owns_conn and self._conn is not None:
+            self._conn.close()
+        self._conn = conn
+        self._owns_conn = False
+        if conn is not None:
+            self._conn.row_factory = sqlite3.Row
+
+    def _require_conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            raise RuntimeError("TrustStore has no active connection (vault locked)")
+        return self._conn
 
     # ---- read -------------------------------------------------------
 
     def get(self, device_id: str) -> Optional[TrustedDevice]:
-        row = self._conn.execute(
+        row = self._require_conn().execute(
             "SELECT * FROM trusted_devices WHERE device_id = ?", (device_id,)
         ).fetchone()
         return _row_to_device(row) if row else None
@@ -134,9 +153,9 @@ class TrustStore:
 
     def list_all(self, status: Optional[TrustStatus] = None) -> list[TrustedDevice]:
         if status is None:
-            rows = self._conn.execute("SELECT * FROM trusted_devices ORDER BY last_seen DESC").fetchall()
+            rows = self._require_conn().execute("SELECT * FROM trusted_devices ORDER BY last_seen DESC").fetchall()
         else:
-            rows = self._conn.execute(
+            rows = self._require_conn().execute(
                 "SELECT * FROM trusted_devices WHERE status = ? ORDER BY last_seen DESC",
                 (status.value,),
             ).fetchall()
@@ -155,22 +174,22 @@ class TrustStore:
                 "record_first_seen() must not overwrite an existing entry"
             )
         now = time.time()
-        self._conn.execute(
+        self._require_conn().execute(
             "INSERT INTO trusted_devices (device_id, public_key, name, first_seen, last_seen, status) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (device_id, public_key, name, now, now, TrustStatus.PENDING.value),
         )
-        self._conn.commit()
+        self._require_conn().commit()
         return self.get(device_id)
 
     def touch_last_seen(self, device_id: str) -> None:
         """Bump last_seen on a re-encounter with a matching key. No-op if
         the device isn't known (call check() first)."""
-        self._conn.execute(
+        self._require_conn().execute(
             "UPDATE trusted_devices SET last_seen = ? WHERE device_id = ?",
             (time.time(), device_id),
         )
-        self._conn.commit()
+        self._require_conn().commit()
 
     def approve(self, device_id: str) -> TrustedDevice:
         """User has seen the fingerprint and approved it: PENDING -> TRUSTED.
@@ -187,23 +206,23 @@ class TrustStore:
                 f"device_id {device_id!r} is REVOKED — approve() refuses to "
                 "silently re-trust a revoked device"
             )
-        self._conn.execute(
+        self._require_conn().execute(
             "UPDATE trusted_devices SET status = ? WHERE device_id = ?",
             (TrustStatus.TRUSTED.value, device_id),
         )
-        self._conn.commit()
+        self._require_conn().commit()
         return self.get(device_id)
 
     def _set_revoked(self, device_id: str, revoked_by: str, reason: Optional[str]) -> TrustedDevice:
         """Internal — see core/trust/revocation.py for the public entrypoint."""
         if self.get(device_id) is None:
             raise ValueError(f"cannot revoke unknown device_id {device_id!r}")
-        self._conn.execute(
+        self._require_conn().execute(
             "UPDATE trusted_devices SET status = ?, revoked_by = ?, revoked_at = ?, revoke_reason = ? "
             "WHERE device_id = ?",
             (TrustStatus.REVOKED.value, revoked_by, time.time(), reason, device_id),
         )
-        self._conn.commit()
+        self._require_conn().commit()
         return self.get(device_id)
 
     # ---- Phase 40: key rotation -------------------------------------------
@@ -259,7 +278,7 @@ class TrustStore:
             )
 
         now = time.time()
-        self._conn.execute(
+        self._require_conn().execute(
             """
             INSERT OR REPLACE INTO identity_transitions
                 (old_device_id, new_device_id, old_public_key, new_public_key,
@@ -282,7 +301,7 @@ class TrustStore:
         if old_device is not None and old_device.status == TrustStatus.TRUSTED:
             existing_new = self.get(cert.new_device_id)
             if existing_new is None:
-                self._conn.execute(
+                self._require_conn().execute(
                     """
                     INSERT INTO trusted_devices
                         (device_id, public_key, name, first_seen, last_seen, status)
@@ -299,12 +318,12 @@ class TrustStore:
                 )
             elif existing_new.status not in (TrustStatus.TRUSTED, TrustStatus.REVOKED):
                 # Promote PENDING → TRUSTED if a valid rotation backs it.
-                self._conn.execute(
+                self._require_conn().execute(
                     "UPDATE trusted_devices SET status = ?, last_seen = ? WHERE device_id = ?",
                     (TrustStatus.TRUSTED.value, now, cert.new_device_id),
                 )
 
-        self._conn.commit()
+        self._require_conn().commit()
         emit(
             SecurityEvent(
                 event_type=SecurityEventType.KEY_ROTATION,
@@ -334,13 +353,13 @@ class TrustStore:
                 continue
             visited.add(current)
             # Successors: device_ids this one rotated TO.
-            rows = self._conn.execute(
+            rows = self._require_conn().execute(
                 "SELECT new_device_id FROM identity_transitions WHERE old_device_id = ?",
                 (current,),
             ).fetchall()
             queue.extend(r[0] for r in rows)
             # Predecessors: device_ids that rotated INTO this one.
-            rows = self._conn.execute(
+            rows = self._require_conn().execute(
                 "SELECT old_device_id FROM identity_transitions WHERE new_device_id = ?",
                 (current,),
             ).fetchall()
@@ -349,7 +368,7 @@ class TrustStore:
         # Order by the timestamp of the transition that introduced each node;
         # the very first device_id has no predecessor row, so it sorts to 0.
         def _order_key(did: str) -> float:
-            row = self._conn.execute(
+            row = self._require_conn().execute(
                 "SELECT timestamp FROM identity_transitions WHERE new_device_id = ?",
                 (did,),
             ).fetchone()

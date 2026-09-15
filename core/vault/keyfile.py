@@ -10,7 +10,8 @@ wrapping/unwrapping the DEK via a passphrase or recovery code, and
 changing the passphrase. It deliberately does NOT implement (later
 Phase 39 sub-steps):
   - the encrypted database lifecycle (39.2)
-  - the session/auto-lock model (39.3)
+  - the session/auto-lock model (39.3) — implemented in session.py;
+    this module only notes it so the keyfile stays focused on wraps
   - the critical-action key for Export (39.4) — its keyfile fields
     exist below per §13's documented format, but stay `None` until
     39.4 wires up the actual set/use flow.

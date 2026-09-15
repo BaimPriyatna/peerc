@@ -26,7 +26,7 @@ Target akhirnya:
 │        ↓                             │
 │ HKDF → Session Keys                  │
 │        ↓                             │
-│ ChaCha20-Poly1305                   │
+│ ChaCha20-Poly1305                    │
 │        ↓                             │
 │ ┌───────────────┐                    │
 │ │ Chat          │                    │
@@ -188,17 +188,19 @@ Sebelum implementasi crypto, buat threat model.
 
 Yang harus dilindungi
 
-| Ancaman | Target |
-|---|---|
-| Packet sniffing | encrypted |
-| Fake device | authentication |
-| MITM | authenticated key exchange |
-| Replay | nonce/session |
-| Malicious file | validation |
-| Path traversal | sanitized filename |
-| Disk DoS | size quota |
-| Private key theft | revocation |
-| Compromised device | trust removal |
+
+| Ancaman            | Target                     |
+| ------------------ | -------------------------- |
+| Packet sniffing    | encrypted                  |
+| Fake device        | authentication             |
+| MITM               | authenticated key exchange |
+| Replay             | nonce/session              |
+| Malicious file     | validation                 |
+| Path traversal     | sanitized filename         |
+| Disk DoS           | size quota                 |
+| Private key theft  | revocation                 |
+| Compromised device | trust removal              |
+
 
 ---
 
@@ -231,21 +233,21 @@ ditolak (diskusi lengkap ada di `BUG_REPORT.md` BUG-003):
 
 - **IP address** — berubah-ubah (DHCP renewal, ganti jaringan).
 - **MAC address** — di-randomize per-network oleh kebanyakan OS modern demi
-  privacy, jadi tidak reliable lagi sebagai identifier stabil.
+privacy, jadi tidak reliable lagi sebagai identifier stabil.
 - **Hostname** — bisa diganti user kapan saja, dan tidak unik (dua device
-  bisa punya hostname sama).
+bisa punya hostname sama).
 - **UUID acak** (status sekarang) — memang stabil, tapi **tidak bisa
-  dibuktikan kepemilikannya**. Siapa pun bisa mengklaim UUID milik device
-  lain karena tidak ada private key di baliknya.
+dibuktikan kepemilikannya**. Siapa pun bisa mengklaim UUID milik device
+lain karena tidak ada private key di baliknya.
 - **Hardware serial / machine-id / IMEI** — secara konsep permanen, tapi
-  tidak portable cross-platform (API berbeda total di Linux/Windows/macOS/
-  Android), dan privacy-invasive karena membocorkan identifier fisik
-  permanen ke peer lain di LAN.
+tidak portable cross-platform (API berbeda total di Linux/Windows/macOS/
+Android), dan privacy-invasive karena membocorkan identifier fisik
+permanen ke peer lain di LAN.
 - **TPM / Secure Enclave** — paling kuat secara teori (private key tidak
-  bisa diekstrak sama sekali), tapi tidak semua device punya akses yang
-  konsisten. Ini jadi kandidat **tempat penyimpanan** private key di masa
-  depan (lihat `KeyStore` abstraction di 3.3), bukan pengganti pendekatan
-  Ed25519 itu sendiri.
+bisa diekstrak sama sekali), tapi tidak semua device punya akses yang
+konsisten. Ini jadi kandidat **tempat penyimpanan** private key di masa
+depan (lihat `KeyStore` abstraction di 3.3), bukan pengganti pendekatan
+Ed25519 itu sendiri.
 
 Kesimpulan: device identity berbasis **keypair Ed25519 yang digenerate
 sekali di device dan disimpan lokal**. Identity ini "tidak berubah" bukan
@@ -1748,7 +1750,7 @@ defines the schema for (`messages`, `transfers`); it can't start for real
 until that schema exists, or absorbs Phase 27's scope directly (see open
 decision below).
 
-Full design, threat model, and rationale: **`SECURE_STORAGE_DESIGN.md`**.
+Full design, threat model, and rationale: `**SECURE_STORAGE_DESIGN.md`**.
 Summary only, here:
 
 ```
@@ -1759,39 +1761,39 @@ DEK (AES-256, random, generated once)
 ```
 
 - Passphrase doubles as the "login" — same passphrase unlocks the app AND
-  derives the key (via a KEK, never directly — see design doc for why).
-  **The wrapped-DEK blob may live in OS keyring storage, but that's just
-  where the bytes sit — unlocking always requires the passphrase.** No
-  auto-unlock from keyring/OS-login alone (considered and explicitly
-  rejected — doesn't cover "someone else picks up an already-unlocked
-  device").
+derives the key (via a KEK, never directly — see design doc for why).
+**The wrapped-DEK blob may live in OS keyring storage, but that's just
+where the bytes sit — unlocking always requires the passphrase.** No
+auto-unlock from keyring/OS-login alone (considered and explicitly
+rejected — doesn't cover "someone else picks up an already-unlocked
+device").
 - **Text chat vs. file actions have different friction, deliberately.**
-  Text chat is session-based (WhatsApp-like — unlock once, read/send
-  freely until idle timeout). File actions (Open/Export/Move to Secure
-  Storage/Delete) default to re-prompting for the passphrase **every
-  time**, independent of the chat session. The one exception: **Incoming
-  Transfer** (receiving a file from a peer) only needs yes/no — nothing
-  is decrypted/exposed at that point. All of this is user-configurable
-  via "don't ask again this session" and an optional separate "critical
-  action" key for Export specifically. Text and file messages get
-  **separate UI areas**, not interleaved into one timeline (unlike
-  WhatsApp) — the differing auth requirement is a property of *where*
-  something is, not something to track per-item.
+Text chat is session-based (WhatsApp-like — unlock once, read/send
+freely until idle timeout). File actions (Open/Export/Move to Secure
+Storage/Delete) default to re-prompting for the passphrase **every
+time**, independent of the chat session. The one exception: **Incoming
+Transfer** (receiving a file from a peer) only needs yes/no — nothing
+is decrypted/exposed at that point. All of this is user-configurable
+via "don't ask again this session" and an optional separate "critical
+action" key for Export specifically. Text and file messages get
+**separate UI areas**, not interleaved into one timeline (unlike
+WhatsApp) — the differing auth requirement is a property of *where*
+something is, not something to track per-item.
 - Recovery code generated once at first identity setup, shown once,
-  never stored — only used once to derive a second wrapped copy of the
-  DEK, so losing the passphrase doesn't mean losing the data.
+never stored — only used once to derive a second wrapped copy of the
+DEK, so losing the passphrase doesn't mean losing the data.
 - Two storage modes: **secure** (encrypted; chat history is always this)
-  and **normal** (plaintext; today's file-transfer behavior), chosen
-  per-transfer on the incoming-file dialog (default: secure). Five
-  distinct actions: **Incoming Transfer** (accept/reject, no key needed),
-  **Open** (ephemeral, stays secure, **must never execute the file** —
-  view/preview only), **Export** (permanent plaintext copy, explicit
-  warned confirmation), **Move to Secure Storage** (import an existing
-  local file, key required), **Delete**. Secure files are named by
-  opaque id, not original filename.
+and **normal** (plaintext; today's file-transfer behavior), chosen
+per-transfer on the incoming-file dialog (default: secure). Five
+distinct actions: **Incoming Transfer** (accept/reject, no key needed),
+**Open** (ephemeral, stays secure, **must never execute the file** —
+view/preview only), **Export** (permanent plaintext copy, explicit
+warned confirmation), **Move to Secure Storage** (import an existing
+local file, key required), **Delete**. Secure files are named by
+opaque id, not original filename.
 - Viewer-cache leak (decrypted content surviving in an external viewer's
-  own cache/temp files) is a known gap — mitigated by rendering in-app
-  wherever possible rather than handing files to an OS-level viewer.
+own cache/temp files) is a known gap — mitigated by rendering in-app
+wherever possible rather than handing files to an OS-level viewer.
 
 **Status:** design fully resolved, including implementation-level specs
 (see `SECURE_STORAGE_DESIGN.md` §11–§17: KDF, DB encryption approach,
@@ -1814,19 +1816,19 @@ core/identity/
 ```
 
 - `TrustedDevice` (Phase 4) gains an identity-chain concept: a
-  `device_id` can be linked to a prior `device_id` via a **Transition
-  Certificate** — the old private key signs a statement authorizing the
-  new public key as its successor.
+`device_id` can be linked to a prior `device_id` via a **Transition
+Certificate** — the old private key signs a statement authorizing the
+new public key as its successor.
 - On receiving a transition certificate for an already-`TRUSTED`
-  `device_id`, `TrustStore` verifies the signature against the *old*
-  (already-trusted) public key, and if valid, inserts the new
-  `device_id` as `TRUSTED` directly — no fresh TOFU `PENDING` step.
+`device_id`, `TrustStore` verifies the signature against the *old*
+(already-trusted) public key, and if valid, inserts the new
+`device_id` as `TRUSTED` directly — no fresh TOFU `PENDING` step.
 - A **compromise-triggered** rotation gets none of this: there's no
-  transition cert from a key that can't be trusted anymore, so the new
-  identity goes through ordinary TOFU like any unknown device.
+transition cert from a key that can't be trusted anymore, so the new
+identity goes through ordinary TOFU like any unknown device.
 - Un-provable rotation (claims to be a successor, signature doesn't
-  check out) is a `WARNING`-severity security event at minimum
-  (`SECURITY_MODEL.md` §29, Phase 41).
+check out) is a `WARNING`-severity security event at minimum
+(`SECURITY_MODEL.md` §29, Phase 41).
 
 **Status:** design complete, no code yet.
 
@@ -1841,15 +1843,15 @@ core/security/
 ```
 
 - Severity: `INFO` / `WARNING` / `HIGH` / `CRITICAL` (`SECURITY_MODEL.md`
-  §29's exact classification).
+§29's exact classification).
 - Every module that already makes a security-relevant decision gets a
-  call site here, not a parallel logging system: `TrustStore.check()`
-  returning `KEY_CHANGED` or `REVOKED` (Phase 4), a handshake rejecting a
-  peer (Phase 6), an admin action (Phase 42) — each emits one
-  `SecurityEvent` at the point the decision is already made.
+call site here, not a parallel logging system: `TrustStore.check()`
+returning `KEY_CHANGED` or `REVOKED` (Phase 4), a handshake rejecting a
+peer (Phase 6), an admin action (Phase 42) — each emits one
+`SecurityEvent` at the point the decision is already made.
 - Optionally signable for audit purposes when part of a group
-  (`GROUP_AUTHORITY_DESIGN.md` §13) — signing is Phase 42's concern, this
-  phase only defines the event shape and severity.
+(`GROUP_AUTHORITY_DESIGN.md` §13) — signing is Phase 42's concern, this
+phase only defines the event shape and severity.
 
 **Status:** selesai (`core/security/events.py`, integration call sites, and `tests/test_security_events.py`).
 
@@ -1866,17 +1868,16 @@ core/group/
 ```
 
 - Admin identity reuses `core/identity/` (Phase 3) exactly — an admin is
-  just a device whose public key is additionally recorded as a group
-  admin, not a separate key type.
-- Membership certificate: signed `{device_id, public_key, group_id,
-  role, permissions, issued_at, expires_at}` (`GROUP_AUTHORITY_DESIGN.md`
-  §4).
+just a device whose public key is additionally recorded as a group
+admin, not a separate key type.
+- Membership certificate: signed `{device_id, public_key, group_id, role, permissions, issued_at, expires_at}` (`GROUP_AUTHORITY_DESIGN.md`
+§4).
 - Policy enforcement happens in `core/`, never only in `ui.py` — matches
-  the project's existing pattern (`core/protocol/messages.py`'s
-  `validate_message()`, `KeyStore`'s refusals) applied to group policy
-  checks specifically.
+the project's existing pattern (`core/protocol/messages.py`'s
+`validate_message()`, `KeyStore`'s refusals) applied to group policy
+checks specifically.
 - Multi-admin threshold (`k`-of-`n` signature verification) for
-  high-stakes actions, per `GROUP_AUTHORITY_DESIGN.md` §14.
+high-stakes actions, per `GROUP_AUTHORITY_DESIGN.md` §14.
 
 **Status:** design complete, no code yet.
 
@@ -1886,18 +1887,18 @@ core/group/
 Full design: `GROUP_AUTHORITY_DESIGN.md` §Export Authorization.
 
 - Resolves the integration question between the personal critical-action
-  key (`SECURE_STORAGE_DESIGN.md` §11.7) and group-managed Export
-  Authorization: **both are required (AND), not either/or**, when a
-  device is in a group with `allow_export` policy active.
+key (`SECURE_STORAGE_DESIGN.md` §11.7) and group-managed Export
+Authorization: **both are required (AND), not either/or**, when a
+device is in a group with `allow_export` policy active.
   - Group's signed, short-lived Export Authorization capability answers
-    "is this allowed at all, per policy" (an authorization check).
+  "is this allowed at all, per policy" (an authorization check).
   - The personal passphrase/critical-action key answers "prove
-    possession, unwrap the DEK" (a cryptographic check).
+  possession, unwrap the DEK" (a cryptographic check).
   - Neither substitutes for the other. A personal (non-group) device is
-    unaffected — only the second gate ever applied to it, unchanged from
-    Phase 39's original design.
+  unaffected — only the second gate ever applied to it, unchanged from
+  Phase 39's original design.
 - Export capability format, expiry, and nonce: `GROUP_AUTHORITY_DESIGN.md`
-  §12.
+§12.
 
 **Status:** design complete, no code yet.
 
@@ -1912,15 +1913,15 @@ core/connectivity/
 ```
 
 - Identity (`device_id`, Phase 3) stays completely separate from Locator
-  (IP/port) — a device can change IP without changing identity.
+(IP/port) — a device can change IP without changing identity.
 - **Endpoint Update**: a signed announcement (reuses Phase 6's signing/
-  nonce-cache machinery) lets a peer safely update a known device's
-  locator without re-running TOFU.
+nonce-cache machinery) lets a peer safely update a known device's
+locator without re-running TOFU.
 - Shares its underlying pattern with Phase 40's Transition Certificate —
-  both are "prove continuity via a signature the receiving peer can
-  verify," just for two different kinds of change (locator vs. identity
-  key). See `INTERNET_CONNECTIVITY_DESIGN.md`'s dedicated section on why
-  this matters more over the Internet than on a LAN.
+both are "prove continuity via a signature the receiving peer can
+verify," just for two different kinds of change (locator vs. identity
+key). See `INTERNET_CONNECTIVITY_DESIGN.md`'s dedicated section on why
+this matters more over the Internet than on a LAN.
 
 **Status:** design complete, no code yet.
 
@@ -1929,9 +1930,9 @@ core/connectivity/
 **Optional.** Full design: `INTERNET_CONNECTIVITY_DESIGN.md` §Rendezvous.
 
 - Not a data server — only helps peers find each other's current
-  locator. Chat/file traffic never routes through it.
+locator. Chat/file traffic never routes through it.
 - Can be self-hosted, separate from Group Authority (Phase 42) — one
-  server doesn't have to do both jobs.
+server doesn't have to do both jobs.
 
 **Status:** design complete, no code yet.
 
@@ -1941,9 +1942,9 @@ core/connectivity/
 `INTERNET_CONNECTIVITY_DESIGN.md` §Optional Relay.
 
 - Direct P2P attempted first; relay only as fallback when NAT/firewall
-  prevents a direct path.
+prevents a direct path.
 - Relay only ever sees already-encrypted (Phase 8) ciphertext — never
-  session plaintext.
+session plaintext.
 
 **Status:** design complete, no code yet.
 
@@ -2025,6 +2026,7 @@ Status akurat + pemetaan ke versi asli ada di `ROADMAP.md`.
 Milestone:
 
 **v0.3 — Secure Foundation**
+
 - Protocol V2 ✅ (v1.1.1–v1.3.0)
 - binary frames ✅ (v1.3.0)
 - device identity ✅ (v1.3.1–v1.4.0)
@@ -2033,6 +2035,7 @@ Milestone:
 - authenticated handshake ⏳ belum (Phase 6)
 
 **v0.4 — Encrypted Transport**
+
 - X25519
 - HKDF
 - ChaCha20-Poly1305
@@ -2041,6 +2044,7 @@ Milestone:
 - timeouts
 
 **v0.5 — Reliable Transfer**
+
 - binary streaming ✅ (v1.3.0)
 - size enforcement ✅
 - safe filenames ✅
@@ -2050,19 +2054,22 @@ Milestone:
 - resume
 
 **v0.6 — Discovery**
+
 - UDP broadcast ✅
 - mDNS
 - manual connection ✅ (termasuk IPv6)
 - multi-subnet support
 
 **v0.7 — Persistence**
+
 - SQLite ✅ (trust store, v1.4.1) — sisanya (message/transfer history)
-  digabung ke Phase 39, lihat SECURE_STORAGE_DESIGN.md §12
+digabung ke Phase 39, lihat SECURE_STORAGE_DESIGN.md §12
 - message history ⏳ (Phase 39, diserap dari sini)
 - transfer history ⏳ (Phase 39, diserap dari sini)
 - trusted devices ✅ (v1.4.1–v1.5.0)
 
 **v0.8 — Production Hardening**
+
 - rate limiting
 - connection limits ✅
 - fuzz testing
@@ -2071,6 +2078,7 @@ Milestone:
 - better error handling ✅ (schema validation, lihat BUG-017/018)
 
 **v1.0**
+
 - Secure
 - Reliable
 - Fast

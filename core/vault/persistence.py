@@ -23,9 +23,16 @@ from .database import VaultDatabase
 class VaultPersistence:
     """Subscribes to chat/transfer events and writes them into a
     VaultDatabase. One instance per running app (or per test) — hold a
-    reference for as long as the vault stays unlocked."""
+    reference for as long as the vault stays unlocked.
 
-    def __init__(self, vault_db: VaultDatabase, event_bus: object):
+    Phase 39.3: vault_db may be set to None while the session is
+    locked; writes are skipped until reattach() after re-unlock rather
+    than crashing on a closed connection. Events that arrive during the
+    lock window are not queued (acceptable — the lock gap is the unlock
+    modal, typically seconds).
+    """
+
+    def __init__(self, vault_db: Optional[VaultDatabase], event_bus: object):
         self.vault_db = vault_db
         self.event_bus = event_bus
 
@@ -41,9 +48,14 @@ class VaultPersistence:
         event_bus.subscribe(ChatMessageStatusChanged, self._on_chat_status_changed)
         event_bus.subscribe(TransferCompleted, self._on_transfer_completed)
 
+    def reattach(self, vault_db: Optional[VaultDatabase]) -> None:
+        """Phase 39.3: point at a freshly unlocked VaultDatabase (or
+        None while locked)."""
+        self.vault_db = vault_db
+
     def _on_chat_received(self, evt) -> None:
-        if not evt.peer_device_id:
-            return  # no authenticated identity available — don't guess
+        if self.vault_db is None or not evt.peer_device_id:
+            return  # locked, or no authenticated identity — don't guess
         self.vault_db.conn.execute(
             "INSERT OR REPLACE INTO messages "
             "(message_id, peer_device_id, direction, text, timestamp, status) "
@@ -53,6 +65,8 @@ class VaultPersistence:
         self.vault_db.conn.commit()
 
     def _on_chat_sent(self, evt) -> None:
+        if self.vault_db is None:
+            return
         if not evt.peer_device_id:
             return
         self.vault_db.conn.execute(
@@ -68,6 +82,8 @@ class VaultPersistence:
         # status change for a message this listener never saw sent
         # (e.g. persistence was wired up after the message was already
         # in flight) has nothing to update, which is fine.
+        if self.vault_db is None:
+            return
         self.vault_db.conn.execute(
             "UPDATE messages SET status = ? WHERE message_id = ?",
             (evt.status, evt.message_id),
@@ -75,6 +91,8 @@ class VaultPersistence:
         self.vault_db.conn.commit()
 
     def _on_transfer_completed(self, evt) -> None:
+        if self.vault_db is None:
+            return
         if not evt.peer_device_id:
             return
         status = "completed" if evt.success else ("rejected" if evt.error == "rejected" else "failed")

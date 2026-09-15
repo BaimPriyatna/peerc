@@ -5,6 +5,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.15.3] — Phase 39.3: Session / auto-lock model
+
+### Added
+- **`core/vault/session.py`** [NEW]: `VaultSession` — the §4 / §11.4
+  session model. Text chat is session-based (unlock once, read/send
+  freely); auto-lock after **5 minutes idle by default** (sudo's own
+  `timestamp_timeout`, user-configurable, `0` = never); hard lock wipes
+  the in-memory DEK and flushes+destroys the vault working copy via
+  `VaultDatabase.lock()`. File actions (`open` / `export` /
+  `move_to_secure` / `delete`) re-prompt by default; per-session
+  "don't ask again" opts into reusing the unlocked session until the
+  next lock; Incoming Transfer stays passphrase-free unless the user
+  turns that on. Settings (`auto_lock_timeout_seconds`,
+  `require_passphrase_for_incoming`) live in the vault `settings` table
+  and are loaded on every unlock. `verify_passphrase()` supports
+  step-up re-auth against the live DEK without locking (critical-action
+  Export AND-gate itself stays 39.4).
+- **`ui.py`**: wires `VaultSession` around the live vault — idle poll
+  loop (`_auto_lock_loop`), activity touch on input, mid-session
+  re-unlock modal (same `VaultUnlockModal` as startup), `/lock` +
+  `Ctrl+L` for manual hard lock, `/autolock [minutes]` to show/set the
+  timeout, `/info` shows remaining idle time. Chat/commands while
+  locked refuse with a re-prompt rather than writing into a closed DB.
+- **`core/trust/store.py`**: `TrustStore.adopt_conn()` — swap onto a
+  freshly unlocked vault connection (or detach with `None` while
+  locked) without closing a connection we don't own.
+- **`core/vault/persistence.py`**: `VaultPersistence.reattach()` —
+  writes are skipped while detached (lock-window events are not
+  queued; the gap is the unlock modal).
+- **`peer.py`**: incoming handshakes during a hard-lock window catch
+  `RuntimeError` from a detached TrustStore and fail closed cleanly
+  instead of crashing the accept loop.
+- **Tests**: `tests/test_vault_session.py` (11) — idle expiry, DEK wipe,
+  settings persistence, file-action re-auth policy, passphrase
+  step-up, TrustStore detach/reattach, persistence skip-while-locked.
+- **Not part of this sub-step:** critical-action key for Export (39.4),
+  file actions / secure-mode storage / magic-byte executable detection
+  (39.5) — `requires_reauth()` is ready for those gates to call.
+
 ## [1.15.2] — Phase 39.2: Encrypted database lifecycle + persistence
 
 ### Added

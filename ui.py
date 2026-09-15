@@ -19,6 +19,8 @@ Commands typed into the input box:
     /copy [last|all]                copy chat to system clipboard
     /clear                          clear chat log
     /info or /me                    show local identity and network details
+    /lock                           lock the vault now (re-prompt for passphrase)
+    /autolock [minutes]             show or set idle auto-lock timeout (default 5)
     /quit or /exit                  quit peerc
 
 Cursor & Mouse:
@@ -59,10 +61,12 @@ import protocol
 from core.trust.store import DEFAULT_DB_PATH as TRUST_DB_LEGACY_PATH
 from core.trust.store import TrustStore
 from core.vault import (
+    DEFAULT_AUTO_LOCK_SECONDS,
     RecoveryCodeError,
     VaultDatabase,
     VaultExistsError,
     VaultPersistence,
+    VaultSession,
     WrongSecretError,
     create_vault,
     load_vault_keyfile,
@@ -74,6 +78,7 @@ from core.vault import (
 from peer import ConnectionManager
 
 UI_TCP_PORT = 5656
+AUTO_LOCK_POLL_SECONDS = 1.0
 
 
 def apply_selection_to_strip(strip: Strip, start: int, end: int, style: Style) -> Strip:
@@ -340,6 +345,7 @@ class ChatApp(App):
         ("ctrl+shift+c", "copy_selection", "Copy"),
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+k", "clear_chat", "Clear"),
+        ("ctrl+l", "lock_vault", "Lock"),
     ]
 
     def __init__(self):
@@ -351,6 +357,8 @@ class ChatApp(App):
         self.trust_store: Optional[TrustStore] = None
         self.vault_db = None  # VaultDatabase, set in on_mount (Phase 39.2)
         self.vault_persistence = None  # VaultPersistence, set in on_mount (Phase 39.2)
+        self.vault_session = None  # VaultSession, set in on_mount (Phase 39.3)
+        self._relocking = False  # True while the mid-session unlock modal is up
         self.registry: Optional[discovery.PeerRegistry] = None
         self.event_bus: Optional[EventBus] = None
         self._unhook_security_events = None
@@ -404,6 +412,11 @@ class ChatApp(App):
             log.write(f"[dim]Migrated {migrated} trusted device(s) into the encrypted vault.[/dim]")
         await self.vault_db.start_auto_flush()
 
+        # Phase 39.3: session/auto-lock wraps the live vault — idle
+        # timeout, hard lock, file-action re-auth policy.
+        self.vault_session = VaultSession()
+        self.vault_session.unlock(dek, self.vault_db)
+
         # BUG-004 (v1.15.1) / Phase 39.2: TrustStore now shares the
         # vault's own connection — its trusted_devices/identity_transitions
         # rows live inside the encrypted vault file, not a separate
@@ -450,10 +463,19 @@ class ChatApp(App):
         )
         asyncio.create_task(self._discovery.run())
         asyncio.create_task(self._prune_ui_loop())
+        asyncio.create_task(self._auto_lock_loop())
 
         log = self.query_one("#chat-log", SelectableRichLog)
         log.write(f"[bold cyan]Started as {self.display_name} ({self.peer_id[:8]})[/bold cyan]")
         log.write("Waiting for peers... use [bold yellow]/help[/bold yellow] for commands.")
+        timeout_m = self.vault_session.auto_lock_seconds / 60.0
+        if self.vault_session.auto_lock_seconds == 0:
+            log.write("[dim]Auto-lock disabled. /lock to lock manually; /autolock <minutes> to enable.[/dim]")
+        else:
+            log.write(
+                f"[dim]Auto-lock after {timeout_m:g} min idle "
+                f"(sudo-style). /lock now, or /autolock to change.[/dim]"
+            )
         log.write("[dim]Tip: Drag mouse over text to block/select. Press Ctrl+C or Ctrl+Shift+C to copy. Press Ctrl+Q to quit.[/dim]")
 
     async def _unlock_vault(self) -> bytes:
@@ -490,11 +512,101 @@ class ChatApp(App):
                 error = "That doesn't look like a valid recovery code — try again."
 
     def on_unmount(self) -> None:
-        # Phase 39.2: flush and destroy the plaintext working copy on
-        # exit — leaving it around defeats the point of the whole
-        # unlock/lock lifecycle.
-        if self.vault_db is not None:
+        # Phase 39.2/39.3: flush and destroy the plaintext working copy
+        # on exit — leaving it around defeats the point of the whole
+        # unlock/lock lifecycle. Prefer session.lock() so the DEK is
+        # wiped too; fall back to vault_db.lock() if session never started.
+        if self.vault_session is not None and self.vault_session.is_unlocked:
+            if self.vault_persistence is not None:
+                self.vault_persistence.reattach(None)
+            if self.trust_store is not None:
+                self.trust_store.adopt_conn(None)
+            self.vault_session.lock()
+            self.vault_db = None
+        elif self.vault_db is not None:
             self.vault_db.lock()
+            self.vault_db = None
+
+    def _touch_session(self) -> None:
+        """Phase 39.3: any real user activity resets the idle timer."""
+        if self.vault_session is not None:
+            self.vault_session.touch()
+
+    def _perform_hard_lock(self) -> None:
+        """Detach dependents, wipe DEK, flush+destroy the working copy.
+        Does not show the unlock modal — caller handles that."""
+        if self.vault_persistence is not None:
+            self.vault_persistence.reattach(None)
+        if self.trust_store is not None:
+            self.trust_store.adopt_conn(None)
+        if self.vault_session is not None and self.vault_session.is_unlocked:
+            self.vault_session.lock()
+        self.vault_db = None
+
+    @work
+    async def action_lock_vault(self) -> None:
+        """Ctrl+L / /lock — lock now and re-prompt."""
+        await self._lock_and_reprompt(reason="locked manually")
+
+    @work
+    async def _reunlock_work(self) -> None:
+        """Worker entry for the unlock modal (push_screen_wait must run
+        inside a Textual worker, not a bare asyncio task or input handler)."""
+        await self._reunlock_vault()
+
+    async def _lock_and_reprompt(self, reason: str = "locked") -> None:
+        if self._relocking:
+            return
+        if self.vault_session is None or not self.vault_session.is_unlocked:
+            # Already locked — just make sure the unlock modal is up.
+            await self._reunlock_vault()
+            return
+        self._perform_hard_lock()
+        self._log(f"[yellow]Vault {reason}. Enter passphrase to continue.[/yellow]")
+        await self._reunlock_vault()
+
+    async def _reunlock_vault(self) -> None:
+        """Show the unlock modal and rewire TrustStore / persistence
+        onto a freshly unlocked VaultDatabase."""
+        if self._relocking:
+            return
+        self._relocking = True
+        try:
+            keyfile = load_vault_keyfile()
+            dek = await self._unlock_vault_loop(keyfile)
+            self.vault_db = VaultDatabase.unlock(dek)
+            await self.vault_db.start_auto_flush()
+            if self.vault_session is None:
+                self.vault_session = VaultSession()
+            self.vault_session.unlock(dek, self.vault_db)
+            if self.trust_store is not None:
+                self.trust_store.adopt_conn(self.vault_db.conn)
+            if self.vault_persistence is not None:
+                self.vault_persistence.reattach(self.vault_db)
+            self._log("[green]Vault unlocked.[/green]")
+        finally:
+            self._relocking = False
+
+    async def _auto_lock_loop(self) -> None:
+        """Phase 39.3: poll idle expiry roughly once a second."""
+        while True:
+            await asyncio.sleep(AUTO_LOCK_POLL_SECONDS)
+            if self._relocking:
+                continue
+            if self.vault_session is None or not self.vault_session.is_unlocked:
+                continue
+            if self.vault_session.idle_expired():
+                # Hard-lock synchronously so the next poll doesn't
+                # re-fire; the @work helper only owns the unlock modal.
+                self._perform_hard_lock()
+                self._log(
+                    "[yellow]Vault auto-locked after idle timeout. "
+                    "Enter passphrase to continue.[/yellow]"
+                )
+                self._reunlock_work()
+
+    def _session_is_unlocked(self) -> bool:
+        return bool(self.vault_session is not None and self.vault_session.is_unlocked)
 
     def copy_to_clipboard(self, text: str) -> None:
         """Copy text to clipboard using terminal escape sequences and system tools."""
@@ -527,6 +639,7 @@ class ChatApp(App):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Switch active conversation when clicking a peer in the left sidebar."""
+        self._touch_session()
         if event.item and event.item.name:
             self.active_peer_id = event.item.name
             peer = self.registry.get(event.item.name)
@@ -692,6 +805,16 @@ class ChatApp(App):
         if not text:
             return
 
+        # Phase 39.3: chat/commands need an unlocked session. Re-unlock
+        # goes through a @work helper because push_screen_wait must run
+        # inside a Textual worker (same reason _setup is @work).
+        if not self._session_is_unlocked():
+            if not self._relocking:
+                self._reunlock_work()
+            self._log("[yellow]Vault is locked — unlock to continue, then retry.[/yellow]")
+            return
+        self._touch_session()
+
         if text.startswith("/"):
             await self._handle_command(text)
             return
@@ -723,12 +846,15 @@ class ChatApp(App):
             self._log(" [bold cyan]/copy [all|last][/bold cyan]      Copy chat log or last message")
             self._log(" [bold cyan]/clear[/bold cyan]                Clear chat log screen")
             self._log(" [bold cyan]/info[/bold cyan] or [bold cyan]/me[/bold cyan]           Show self identity & network details")
+            self._log(" [bold cyan]/lock[/bold cyan]                 Lock vault now (Ctrl+L); re-prompt for passphrase")
+            self._log(" [bold cyan]/autolock [minutes][/bold cyan]  Show/set idle auto-lock (default 5; 0 = off)")
             self._log(" [bold cyan]/quit[/bold cyan] or [bold cyan]/exit[/bold cyan]          Exit application")
             self._log("[bold yellow]╚═══════════════════════ Shortcuts ══════════════════════╝[/bold yellow]")
             self._log(" [dim]• Block text with mouse cursor, then press Ctrl+C or Ctrl+Shift+C to copy[/dim]")
             self._log(" [dim]• Click any peer in the sidebar to switch conversation[/dim]")
             self._log(" [dim]• Ctrl+C : Copy selected text (or quit if nothing selected)[/dim]")
             self._log(" [dim]• Ctrl+Shift+C : Copy selected text to clipboard[/dim]")
+            self._log(" [dim]• Ctrl+L : Lock vault now[/dim]")
             self._log(" [dim]• Ctrl+Q : Quit peerc immediately[/dim]")
             self._log(" [dim]• Ctrl+K : Clear chat history[/dim]")
 
@@ -894,7 +1020,51 @@ class ChatApp(App):
             active_peer = self.registry.get(self.active_peer_id) if self.active_peer_id else None
             active_str = f"{active_peer.name} ({active_peer.ip})" if active_peer else "None"
             self._log(f"  [bold]Active Peer:[/bold]{active_str}")
+            if self.vault_session is not None:
+                if self.vault_session.auto_lock_seconds == 0:
+                    lock_str = "disabled"
+                else:
+                    mins = self.vault_session.auto_lock_seconds / 60.0
+                    remaining = self.vault_session.seconds_until_lock()
+                    rem_str = f", {remaining:.0f}s left" if remaining is not None else ""
+                    lock_str = f"{mins:g} min idle{rem_str}"
+                self._log(f"  [bold]Auto-lock:[/bold]  {lock_str}")
+                self._log(
+                    f"  [bold]Vault:[/bold]      "
+                    f"{'unlocked' if self.vault_session.is_unlocked else 'locked'}"
+                )
             self._log("[bold yellow]╚═══════════════════════════════════════════════════╝[/bold yellow]")
+
+        elif cmd == "/lock":
+            self.action_lock_vault()
+
+        elif cmd == "/autolock":
+            if self.vault_session is None or not self.vault_session.is_unlocked:
+                self._log("[red]Vault is locked — unlock first.[/red]")
+                return
+            if not arg:
+                secs = self.vault_session.auto_lock_seconds
+                if secs == 0:
+                    self._log("[cyan]Auto-lock is disabled (0). /autolock <minutes> to enable.[/cyan]")
+                else:
+                    self._log(
+                        f"[cyan]Auto-lock after {secs / 60.0:g} minutes idle "
+                        f"({secs:g}s). Default is {DEFAULT_AUTO_LOCK_SECONDS / 60.0:g}.[/cyan]"
+                    )
+                return
+            try:
+                minutes = float(arg)
+            except ValueError:
+                self._log("[yellow]Usage: /autolock [minutes]  (0 disables auto-lock)[/yellow]")
+                return
+            if minutes < 0:
+                self._log("[yellow]Minutes must be >= 0.[/yellow]")
+                return
+            self.vault_session.set_auto_lock_seconds(minutes * 60.0)
+            if minutes == 0:
+                self._log("[green]Auto-lock disabled. /lock still works.[/green]")
+            else:
+                self._log(f"[green]Auto-lock set to {minutes:g} minute(s) idle.[/green]")
 
         elif cmd in ("/quit", "/exit", "/q"):
             self.exit()
