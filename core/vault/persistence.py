@@ -96,11 +96,18 @@ class VaultPersistence:
         if not evt.peer_device_id:
             return
         status = "completed" if evt.success else ("rejected" if evt.error == "rejected" else "failed")
-        # Phase 39.5 (file actions / secure storage) doesn't exist yet —
-        # every transfer today lands as a 'normal' file at whatever path
-        # file_transfer.py's own sandboxing already resolved it to.
-        storage_mode = "normal"
-        storage_path = evt.filepath or ""
+        
+        # Phase 39.5: handle secure storage mode
+        # evt.storage_mode and evt.secure_id are set by the receiver/sender
+        storage_mode = getattr(evt, "storage_mode", "normal")
+        
+        if storage_mode == "secure":
+            # For secure files, storage_path is the secure_id (opaque identifier)
+            storage_path = getattr(evt, "secure_id", "")
+        else:
+            # For normal files, storage_path is the actual filesystem path
+            storage_path = evt.filepath or ""
+        
         self.vault_db.conn.execute(
             "INSERT OR REPLACE INTO transfers "
             "(transfer_id, peer_device_id, direction, filename, size, checksum, "

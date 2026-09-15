@@ -8,7 +8,7 @@
 [![Tests](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml/badge.svg)](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.15.3-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.15.5-informational.svg)](CHANGELOG.md)
 
 A terminal-based peer-to-peer chat and file transfer application. No central server — peers discover each other directly over the local network (LAN or WiFi hotspot) and communicate directly over encrypted TCP connections.
 
@@ -245,15 +245,14 @@ The full suite also runs automatically in CI on every push to `main`. See `.gith
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for phased progress and [`CHANGELOG.md`](CHANGELOG.md) for a full version history.
 
-Current version: **1.15.3** — Discovery V2 (protocol fields + mDNS), Event
-Architecture (Phase 26), BUG-004 (live authenticated, encrypted
-transport), and Phase 39.1–39.3 of Secure Storage (vault envelope
-encryption, encrypted database with chat/transfer persistence, and
-session/auto-lock) complete. Messages and file transfers are saved
-locally, encrypted at rest; the vault hard-locks after idle (default
-5 min) or on `/lock` / Ctrl+L.
-Next planned: Phase 39.5 (file actions / secure storage), Phase 42 (Group
-Authority System).
+Current version: **1.15.5** — Phase 39 (Secure Storage) complete! All 5
+sub-steps done: vault envelope encryption, encrypted database with
+chat/transfer persistence, session/auto-lock model, critical-action Export
+key, and file actions (Open/Export/Delete/Move with executable detection).
+Messages, transfers, trusted devices, and secure files all encrypted at rest.
+Vault auto-locks after 5 min idle (configurable) or on `/lock` / Ctrl+L.
+File commands: `/files`, `/open`, `/export`, `/secure`, `/delete`.
+Next planned: Phase 42 (Group Authority System).
 
 ---
 

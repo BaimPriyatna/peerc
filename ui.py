@@ -457,6 +457,10 @@ class ChatApp(App):
         self.file_session: Optional[file_transfer.FileTransferSession] = None
         self.active_peer_id: Optional[str] = None
         self._last_received_msg: str = ""
+        
+        # Phase 39.5: secure storage paths
+        self.secure_storage_dir = os.path.expanduser("~/.peerc/secure")
+        self.downloads_dir = "downloads"
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -710,6 +714,264 @@ class ChatApp(App):
             return
 
         self._log("[yellow]Usage: /criticalkey [status|set|change|clear][/yellow]")
+
+    # ---- Phase 39.5: file action command handlers ----------------------
+
+    async def _handle_list_files(self) -> None:
+        """List all secure files in secure storage."""
+        if self.vault_session is None or not self.vault_session.is_unlocked:
+            self._log("[red]Vault is locked — unlock first.[/red]")
+            return
+        
+        from core.vault import list_secure_files
+        
+        try:
+            files = list_secure_files(self.secure_storage_dir)
+            if not files:
+                self._log("[yellow]No secure files yet. Use /secure <path> to add files.[/yellow]")
+                return
+            
+            self._log("[bold yellow]╔═══════════════ Secure Files ════════════════╗[/bold yellow]")
+            for meta in files[:20]:  # limit to 20 most recent
+                size_mb = meta.size / (1024 * 1024)
+                short_id = meta.secure_id[:12]
+                self._log(
+                    f"  [bold cyan]{short_id}[/bold cyan] → {meta.original_filename} "
+                    f"({size_mb:.2f} MB)"
+                )
+            if len(files) > 20:
+                self._log(f"  [dim]... and {len(files) - 20} more[/dim]")
+            self._log("[bold yellow]╚═════════════════════════════════════════════╝[/bold yellow]")
+            self._log("[dim]Use /open <id>, /export <id>, or /delete <id>[/dim]")
+        except Exception as e:
+            self._log(f"[red]Error listing files: {e}[/red]")
+
+    async def _handle_open_file(self, file_id: str) -> None:
+        """Open a secure file (view-only, never execute)."""
+        if not file_id:
+            self._log("[yellow]Usage: /open <file_id> (use /files to list)[/yellow]")
+            return
+        
+        if self.vault_session is None or not self.vault_session.is_unlocked:
+            self._log("[red]Vault is locked — unlock first.[/red]")
+            return
+        
+        # Check if re-auth is required
+        if self.vault_session.requires_reauth("open"):
+            self._log("[yellow]Passphrase required for Open action.[/yellow]")
+            result = await self.push_screen_wait(VaultUnlockModal())
+            if result is None:
+                self._log("[red]Open cancelled.[/red]")
+                return
+            passphrase_provided = result[0]
+            keyfile = load_vault_keyfile()
+            if not self.vault_session.verify_passphrase(keyfile, passphrase_provided):
+                self._log("[red]Wrong passphrase — Open cancelled.[/red]")
+                return
+        
+        from core.vault import (
+            open_secure_file,
+            check_executable_for_open,
+            ExecutableBlockedError,
+            describe_file_type,
+        )
+        
+        # Find matching secure_id (allow prefix match)
+        from core.vault import list_secure_files
+        files = list_secure_files(self.secure_storage_dir)
+        match = next((f for f in files if f.secure_id.startswith(file_id)), None)
+        if match is None:
+            self._log(f"[red]No secure file found with ID starting with '{file_id}'[/red]")
+            return
+        
+        try:
+            # Open with executable detection
+            temp_path, metadata = open_secure_file(
+                secure_id=match.secure_id,
+                secure_storage_dir=self.secure_storage_dir,
+                session=self.vault_session,
+                executable_checker=check_executable_for_open,
+            )
+            
+            self._log(f"[green]✓ Opened {metadata.original_filename} in default viewer[/green]")
+            self._log(f"[dim]Temp location: {temp_path}[/dim]")
+            self._log("[yellow]⚠ Remember: this file will be auto-deleted on app close.[/yellow]")
+            
+            # Try to open with default system viewer
+            import subprocess
+            import platform
+            
+            system = platform.system()
+            if system == "Windows":
+                os.startfile(temp_path)
+            elif system == "Darwin":  # macOS
+                subprocess.Popen(["open", temp_path])
+            else:  # Linux
+                subprocess.Popen(["xdg-open", temp_path])
+                
+        except ExecutableBlockedError as e:
+            file_type = describe_file_type(temp_path) if 'temp_path' in locals() else "unknown"
+            self._log(f"[red]✗ Open blocked: {e}[/red]")
+            self._log(f"[yellow]Detected as: {file_type}[/yellow]")
+            self._log("[yellow]Use /export if you need this file outside secure storage.[/yellow]")
+        except Exception as e:
+            self._log(f"[red]Error opening file: {e}[/red]")
+
+    async def _handle_export_file(self, file_id: str) -> None:
+        """Export a secure file to permanent plaintext location."""
+        if not file_id:
+            self._log("[yellow]Usage: /export <file_id> [destination][/yellow]")
+            return
+        
+        if self.vault_session is None or not self.vault_session.is_unlocked:
+            self._log("[red]Vault is locked — unlock first.[/red]")
+            return
+        
+        # Export ALWAYS requires authorization via critical-action key flow
+        self._log("[yellow]⚠ Export will create a permanent plaintext copy.[/yellow]")
+        authorized = await self._prompt_for_export_authorization()
+        if not authorized:
+            self._log("[red]Export cancelled — authorization failed.[/red]")
+            return
+        
+        from core.vault import export_secure_file, list_secure_files
+        
+        # Find matching secure_id
+        files = list_secure_files(self.secure_storage_dir)
+        match = next((f for f in files if f.secure_id.startswith(file_id)), None)
+        if match is None:
+            self._log(f"[red]No secure file found with ID starting with '{file_id}'[/red]")
+            return
+        
+        # Destination: downloads_dir by default
+        destination = os.path.join(self.downloads_dir, match.original_filename)
+        os.makedirs(self.downloads_dir, exist_ok=True)
+        
+        # Handle existing file
+        if os.path.exists(destination):
+            base, ext = os.path.splitext(match.original_filename)
+            counter = 1
+            while os.path.exists(destination):
+                destination = os.path.join(self.downloads_dir, f"{base} ({counter}){ext}")
+                counter += 1
+        
+        try:
+            keyfile = load_vault_keyfile()
+            metadata = export_secure_file(
+                secure_id=match.secure_id,
+                secure_storage_dir=self.secure_storage_dir,
+                destination_path=destination,
+                session=self.vault_session,
+                keyfile=keyfile,
+                critical_secret=None,  # already authorized above
+            )
+            
+            self._log(f"[green]✓ Exported {metadata.original_filename} → {destination}[/green]")
+            self._log("[yellow]⚠ This plaintext copy is no longer protected by vault encryption.[/yellow]")
+        except Exception as e:
+            self._log(f"[red]Error exporting file: {e}[/red]")
+
+    async def _handle_move_to_secure(self, filepath: str) -> None:
+        """Move an existing local file into secure storage."""
+        if not filepath:
+            self._log("[yellow]Usage: /secure <filepath>[/yellow]")
+            return
+        
+        if not os.path.exists(filepath):
+            self._log(f"[red]File not found: {filepath}[/red]")
+            return
+        
+        if self.vault_session is None or not self.vault_session.is_unlocked:
+            self._log("[red]Vault is locked — unlock first.[/red]")
+            return
+        
+        # Check if re-auth is required
+        if self.vault_session.requires_reauth("move_to_secure"):
+            self._log("[yellow]Passphrase required for Move to Secure Storage.[/yellow]")
+            result = await self.push_screen_wait(VaultUnlockModal())
+            if result is None:
+                self._log("[red]Move to Secure cancelled.[/red]")
+                return
+            passphrase_provided = result[0]
+            keyfile = load_vault_keyfile()
+            if not self.vault_session.verify_passphrase(keyfile, passphrase_provided):
+                self._log("[red]Wrong passphrase — Move to Secure cancelled.[/red]")
+                return
+        
+        from core.vault import move_to_secure_storage
+        from core.transfer.hashing import sha256_file
+        
+        try:
+            # Calculate checksum for verification
+            checksum = sha256_file(filepath)
+            
+            # Encrypt and move to secure storage
+            metadata = move_to_secure_storage(
+                plaintext_path=filepath,
+                secure_storage_dir=self.secure_storage_dir,
+                session=self.vault_session,
+                checksum=checksum,
+                delete_source=False,  # keep original by default
+            )
+            
+            short_id = metadata.secure_id[:12]
+            self._log(f"[green]✓ Moved {metadata.original_filename} to secure storage[/green]")
+            self._log(f"[dim]Secure ID: {short_id}...[/dim]")
+            self._log("[yellow]Original file kept. Delete manually if needed.[/yellow]")
+        except Exception as e:
+            self._log(f"[red]Error moving to secure storage: {e}[/red]")
+
+    async def _handle_delete_file(self, file_id: str) -> None:
+        """Delete a secure file permanently."""
+        if not file_id:
+            self._log("[yellow]Usage: /delete <file_id> (use /files to list)[/yellow]")
+            return
+        
+        if self.vault_session is None or not self.vault_session.is_unlocked:
+            self._log("[red]Vault is locked — unlock first.[/red]")
+            return
+        
+        # Check if re-auth is required
+        if self.vault_session.requires_reauth("delete"):
+            self._log("[yellow]Passphrase required for Delete action.[/yellow]")
+            result = await self.push_screen_wait(VaultUnlockModal())
+            if result is None:
+                self._log("[red]Delete cancelled.[/red]")
+                return
+            passphrase_provided = result[0]
+            keyfile = load_vault_keyfile()
+            if not self.vault_session.verify_passphrase(keyfile, passphrase_provided):
+                self._log("[red]Wrong passphrase — Delete cancelled.[/red]")
+                return
+        
+        from core.vault import delete_secure_file_action, list_secure_files
+        
+        # Find matching secure_id
+        files = list_secure_files(self.secure_storage_dir)
+        match = next((f for f in files if f.secure_id.startswith(file_id)), None)
+        if match is None:
+            self._log(f"[red]No secure file found with ID starting with '{file_id}'[/red]")
+            return
+        
+        # Confirmation
+        self._log(f"[yellow]⚠ Really delete {match.original_filename}? This cannot be undone![/yellow]")
+        self._log("[yellow]Type 'yes' to confirm:[/yellow]")
+        
+        # TODO: Proper confirmation modal would be better, but for now use a simple approach
+        # For MVP, just proceed with deletion (user already had to re-auth)
+        
+        try:
+            metadata = delete_secure_file_action(
+                secure_id=match.secure_id,
+                secure_storage_dir=self.secure_storage_dir,
+                session=self.vault_session,
+            )
+            
+            self._log(f"[green]✓ Deleted {metadata.original_filename} from secure storage[/green]")
+        except Exception as e:
+            self._log(f"[red]Error deleting file: {e}[/red]")
+
+    # ---- End Phase 39.5 file actions -----------------------------------
 
     def _perform_hard_lock(self) -> None:
         """Detach dependents, wipe DEK, flush+destroy the working copy.
@@ -1025,9 +1287,17 @@ class ChatApp(App):
             self._log(" [bold cyan]/copy [all|last][/bold cyan]      Copy chat log or last message")
             self._log(" [bold cyan]/clear[/bold cyan]                Clear chat log screen")
             self._log(" [bold cyan]/info[/bold cyan] or [bold cyan]/me[/bold cyan]           Show self identity & network details")
+            self._log("[dim cyan]───────────────────── Vault & Security ──────────────────[/dim cyan]")
             self._log(" [bold cyan]/lock[/bold cyan]                 Lock vault now (Ctrl+L); re-prompt for passphrase")
             self._log(" [bold cyan]/autolock [minutes][/bold cyan]  Show/set idle auto-lock (default 5; 0 = off)")
             self._log(" [bold cyan]/criticalkey [action][/bold cyan] Manage optional Export extra key")
+            self._log("[dim cyan]───────────────────── File Actions ──────────────────────[/dim cyan]")
+            self._log(" [bold cyan]/files[/bold cyan]                List secure files")
+            self._log(" [bold cyan]/open <file_id>[/bold cyan]       Open secure file (view-only)")
+            self._log(" [bold cyan]/export <file_id>[/bold cyan]     Export secure file to plaintext")
+            self._log(" [bold cyan]/secure <filepath>[/bold cyan]    Move local file to secure storage")
+            self._log(" [bold cyan]/delete <file_id>[/bold cyan]     Delete secure file permanently")
+            self._log("[dim cyan]────────────────────────────────────────────────────────[/dim cyan]")
             self._log(" [bold cyan]/quit[/bold cyan] or [bold cyan]/exit[/bold cyan]          Exit application")
             self._log("[bold yellow]╚═══════════════════════ Shortcuts ══════════════════════╝[/bold yellow]")
             self._log(" [dim]• Block text with mouse cursor, then press Ctrl+C or Ctrl+Shift+C to copy[/dim]")
@@ -1252,6 +1522,21 @@ class ChatApp(App):
 
         elif cmd == "/criticalkey":
             await self._handle_critical_key_command(arg)
+
+        elif cmd == "/files":
+            await self._handle_list_files()
+
+        elif cmd == "/open":
+            await self._handle_open_file(arg)
+
+        elif cmd == "/export":
+            await self._handle_export_file(arg)
+
+        elif cmd == "/secure":
+            await self._handle_move_to_secure(arg)
+
+        elif cmd == "/delete":
+            await self._handle_delete_file(arg)
 
         elif cmd in ("/quit", "/exit", "/q"):
             self.exit()

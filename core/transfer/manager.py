@@ -105,8 +105,14 @@ class FileTransferManager:
         checksum: str,
         sender_name: str,
         dest_path: str,
+        storage_mode: str = "normal",
+        secure_storage_dir: Optional[str] = None,
+        dek: Optional[bytes] = None,
     ) -> FileReceiver:
-        """Register a validated receiver for an incoming transfer."""
+        """Register a validated receiver for an incoming transfer.
+        
+        Phase 39.5: supports storage_mode='secure' for encrypt-on-arrival.
+        """
         receiver = FileReceiver(
             transfer_id=transfer_id,
             filename=filename,
@@ -114,6 +120,9 @@ class FileTransferManager:
             expected_checksum=checksum,
             sender_name=sender_name,
             dest_path=dest_path,
+            storage_mode=storage_mode,
+            secure_storage_dir=secure_storage_dir,
+            dek=dek,
         )
         self._receivers[transfer_id] = receiver
         return receiver

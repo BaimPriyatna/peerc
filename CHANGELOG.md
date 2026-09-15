@@ -5,6 +5,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.15.5] — Phase 39.5: File actions / secure storage
+
+### Added
+- **`core/vault/secure_file.py`** [NEW]: Per-file encryption/decryption with AES-256-GCM and HKDF-derived keys. `encrypt_file()` generates unique salt+nonce per file, opaque secure_id naming (64-char hex, not original filename). `decrypt_file()` verifies size/checksum, detects tampering via GCM auth tag. `delete_secure_file()` removes both ciphertext and metadata. `list_secure_files()` returns all encrypted files sorted by timestamp. Metadata (`.meta` JSON) stores original filename, size, checksum, salt, nonce separately from ciphertext (`.peercfile`).
+- **`core/vault/file_actions.py`** [NEW]: Five distinct file operations integrating with `VaultSession.requires_reauth()`:
+  - `open_secure_file()`: decrypt to ephemeral temp, strip executable bits, call executable_checker, hand to OS viewer. View-only, never execute. Re-auth by default.
+  - `export_secure_file()`: decrypt to permanent plaintext copy. Requires `authorize_export()` (39.4 critical-action key gate). FileExistsError on existing destination.
+  - `move_to_secure_storage()`: encrypt existing local file into secure storage. Re-auth required by default. Optional delete_source parameter.
+  - `delete_secure_file_action()`: remove secure file + metadata permanently. Re-auth by default.
+  - `handle_incoming_transfer()`: authorize accept/reject for incoming files. Passphrase-free unless require_passphrase_for_incoming enabled.
+  All actions raise SessionLockedError when vault locked. Secure deletion (overwrite-then-unlink) for plaintext sources.
+- **`core/vault/executable_detection.py`** [NEW]: Magic-byte content sniffing for executable detection (§6, §11.6). Checks PE (`MZ`), ELF (`\x7fELF`), Mach-O (6 variants), shebang (`#!`). Positive allowlist for safe formats (PDF, PNG, JPEG, GIF, plain text via printable-ASCII heuristic). Fails closed on inconclusive results in strict mode. Extension is secondary signal only — renamed executables still caught by content. `check_executable_for_open()` raises `ExecutableBlockedError` to prevent accidental execution via Open. `describe_file_type()` provides human-readable detection results for UI messages.
+- **`core/transfer/receiver.py`**: secure storage mode support. `FileReceiver` accepts `storage_mode`, `secure_storage_dir`, `dek` parameters. When `storage_mode='secure'`, `_finalize_secure()` encrypts verified plaintext on-arrival, securely deletes temp `.part` file. `secure_id` attribute set after encryption. Import guard prevents circular dependency.
+- **`core/transfer/manager.py`**: `create_receiver()` gains `storage_mode`, `secure_storage_dir`, `dek` parameters for Phase 39.5 integration.
+- **`core/vault/persistence.py`**: handles `storage_mode='secure'` in `_on_transfer_completed()`. Stores `secure_id` in `storage_path` column for secure files (via `getattr(evt, 'secure_id', '')`), plaintext path for normal files.
+- **`core/vault/__init__.py`**: exports Phase 39.5 APIs (`SecureFileError`, `SecureFileCorruptError`, `SecureFileMetadata`, `encrypt_file`, `decrypt_file`, `delete_secure_file`, `generate_secure_id`, `load_metadata`, `list_secure_files`, `FileActionError`, `AuthorizationError`, `ExecutableBlockedError`, `open_secure_file`, `export_secure_file`, `move_to_secure_storage`, `delete_secure_file_action`, `handle_incoming_transfer`, `ExecutableDetectionError`, `is_executable`, `check_executable_for_open`, `describe_file_type`).
+- **`ui.py`**: file action commands and UI flows:
+  - `/files`: list all secure files (12-char ID prefix, original filename, size in MB). Limit to 20 most recent.
+  - `/open <file_id>`: decrypt to temp, open in default system viewer (Windows: `os.startfile`, macOS: `open`, Linux: `xdg-open`). Executable detection blocks dangerous files. Re-auth via `VaultUnlockModal` when `requires_reauth('open')` is True.
+  - `/export <file_id>`: export to permanent plaintext copy in downloads_dir. Always goes through `_prompt_for_export_authorization()` (39.4 gate). Auto-renames if destination exists (append counter).
+  - `/secure <filepath>`: encrypt local file into secure storage. Calculates SHA-256 checksum. Keeps original file by default (delete_source=False). Re-auth when required.
+  - `/delete <file_id>`: delete secure file permanently. Re-auth when required. Shows original filename in confirmation message.
+  All commands check `vault_session.is_unlocked`, raise appropriate errors, log results with Rich formatting. Prefix matching on secure_id for user convenience. Added `secure_storage_dir` (`~/.peerc/secure`) and `downloads_dir` (`downloads`) attributes. Updated `/help` with "File Actions" section between "Vault & Security" and quit command.
+- **Tests**: 68 total test cases across 3 new test files:
+  - `tests/test_secure_file.py` (18): encrypt/decrypt roundtrip, metadata preservation (all fields), unique salt/nonce per file, wrong DEK rejection (SecureFileCorruptError), corrupted ciphertext detection, size mismatch detection, delete operations (both files removed), list_secure_files sorting (descending timestamp), opaque secure_id naming (64 hex chars), generate_secure_id uniqueness, load_metadata error cases, auto-create secure_dir.
+  - `tests/test_executable_detection.py` (28): PE/ELF/Mach-O/shebang detection (all 6 Mach-O variants), safe format allowlist (PDF/PNG/JPEG/GIF/text), executable extensions flagged, extension mismatch caught (PE content with .txt extension), fail-closed on unknown files (strict mode), check_executable_for_open raises ExecutableDetectionError, describe_file_type descriptions, empty file allowed, ZIP not flagged, renamed ELF still detected.
+  - `tests/test_file_actions.py` (22): open_secure_file decrypts to temp, executable_checker integration, re-auth when required, "don't ask again" bypasses re-auth, export requires authorize_export, export with critical key (both success and rejection), export creates permanent copy, move_to_secure encrypts local file, move requires re-auth, delete removes both files, delete requires re-auth, handle_incoming_transfer authorization, all actions raise SessionLockedError when locked, open strips executable bits, export raises FileExistsError on existing destination.
+
+### Changed
+- **Phase 39 complete**: all five sub-steps (39.1 envelope encryption, 39.2 encrypted DB, 39.3 session/auto-lock, 39.4 critical-action Export key, 39.5 file actions/secure storage) now implemented and tested. Secure Storage design (`docs/SECURE_STORAGE_DESIGN.md`) fully realized. Chat history, transfer records, trusted devices, and secure files all encrypted at rest. Session-based unlock model with configurable auto-lock. File actions with executable detection and configurable re-auth policy. Export gated by optional critical-action key. Ready for Phase 42 (Group Authority System).
+
 ## [1.15.4] — Phase 39.4: Critical-action Export key primitive
 
 ### Added
