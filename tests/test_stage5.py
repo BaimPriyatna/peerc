@@ -5,6 +5,11 @@ Runs the app in memory (no real terminal needed), types a /help command,
 and checks it renders without crashing. This isn't a full integration test
 of networking + UI together — it verifies the UI itself mounts, wires up
 discovery/chat/file_transfer sessions, and responds to input.
+
+Note: the vault-unlock flow (Phase 39.2+) is deliberately bypassed below
+rather than driven through its modal — that interactive flow has its own
+dedicated tests elsewhere; this file only needs a DEK in hand so _setup()
+can get past it and wire up the rest of the app.
 """
 
 import asyncio
@@ -15,6 +20,8 @@ import tempfile
 import core.identity as identity
 import core.identity.key_storage as ks
 import discovery
+from core.vault.crypto import new_dek
+from core.vault.database import VaultDatabase
 from ui import ChatApp
 
 
@@ -22,10 +29,13 @@ async def main() -> None:
     tmpdir = tempfile.mkdtemp(prefix="peerc_stage5_")
     tmp_id = os.path.join(tmpdir, "identity.json")
     tmp_key = os.path.join(tmpdir, "key.pem")
+    tmp_vault_db = os.path.join(tmpdir, "vault.db")
     keystore = ks.KeyStore(plaintext_fallback_path=tmp_key)
 
     saved_load_identity = identity.load_or_create_identity
     saved_disc_load = discovery.load_or_create_identity
+    saved_unlock_vault = ChatApp._unlock_vault
+    saved_db_unlock = VaultDatabase.unlock.__func__
 
     def _isolated_load(name="peer", identity_file=tmp_id, key_store=None):
         return saved_load_identity(name=name, identity_file=tmp_id, key_store=keystore)
@@ -34,8 +44,20 @@ async def main() -> None:
         dev = _isolated_load(name="TestUser", identity_file=tmp_id)
         return dev.device_id, dev.name
 
+    async def _isolated_unlock_vault(self):
+        # Skip VaultCreateModal/VaultUnlockModal entirely (no ~/.peerc on
+        # a fresh CI runner would otherwise hang _setup() forever waiting
+        # for interactive passphrase input) — just hand back a fresh DEK.
+        return new_dek()
+
+    def _isolated_db_unlock(cls, dek, vault_db_path=tmp_vault_db, force_fallback=False):
+        # Same idea: keep this off the real ~/.peerc/vault.db.
+        return saved_db_unlock(cls, dek, vault_db_path=vault_db_path, force_fallback=force_fallback)
+
     identity.load_or_create_identity = _isolated_load
     discovery.load_or_create_identity = _isolated_disc_load
+    ChatApp._unlock_vault = _isolated_unlock_vault
+    VaultDatabase.unlock = classmethod(_isolated_db_unlock)
 
     try:
         app = ChatApp()
@@ -65,6 +87,8 @@ async def main() -> None:
     finally:
         identity.load_or_create_identity = saved_load_identity
         discovery.load_or_create_identity = saved_disc_load
+        ChatApp._unlock_vault = saved_unlock_vault
+        VaultDatabase.unlock = classmethod(saved_db_unlock)
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 

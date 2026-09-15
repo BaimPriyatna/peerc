@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **1.15.6** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.15.7** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
@@ -40,6 +40,7 @@ development into maintenance/updates, not before.
 | `1.15.4` | 39.4 | `core/vault/session.py`: critical-action Export key primitive — optional second secret for Export only, AND-gated with the live unlocked session via HKDF, AEAD-tag verifier in encrypted vault settings, set/change/clear/verify/`authorize_export()` APIs; tests cover unset/default, wrong-key, neither-half-alone, change/clear, and persistence |
 | `1.15.5` | 39.5 | `core/vault/secure_file.py`, `file_actions.py`, `executable_detection.py` [NEW]: per-file AES-256-GCM encryption with HKDF-derived keys, opaque secure_id naming; Open/Export/Delete/Move operations with VaultSession re-auth integration; magic-byte executable detection (PE/ELF/Mach-O/shebang); `ui.py` gains `/files`/`/open`/`/export`/`/secure`/`/delete` commands; 68 tests across 3 test files |
 | `1.15.6` | 39.5 | Bug fixes: `is_executable()` fail-closed logic corrected for strict mode (inconclusive content now always blocks, extension/content mismatches now caught); `.bin` removed from `EXECUTABLE_EXTENSIONS`; `open_secure_file()` now catches `ExecutableDetectionError` from `check_executable_for_open` (previously only caught `ExecutableBlockedError`, so blocked-open temp files leaked undeleted and `ui.py`'s block message never fired); detected file type now surfaced in the block message before temp-file cleanup instead of being read afterward |
+| `1.15.7` | 39.5 | `tests/test_stage5.py`: fixed a stale test-isolation gap — the headless UI smoke test never isolated the vault path (only identity), so on any machine without a pre-existing `~/.peerc` it hung forever waiting on `VaultCreateModal`'s interactive passphrase prompt. Now bypasses `ChatApp._unlock_vault` and isolates `VaultDatabase.unlock()` to a temp path, since this file only smoke-tests UI wiring, not the vault-unlock flow itself |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7

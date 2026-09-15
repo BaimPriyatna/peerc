@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.15.7] — Fix stale vault isolation in the Stage 5 UI smoke test
+
+### Fixed
+- **`tests/test_stage5.py`**: the headless `ui.py` smoke test isolated `identity.load_or_create_identity` for a temp dir, but never isolated the vault path — `_unlock_vault()` always checked the real `~/.peerc/vault_keyfile.json`. On any environment without a pre-existing vault (every fresh CI runner), this triggered `VaultCreateModal`'s interactive passphrase prompt, which the test's `pilot.pause(0.5)` never answers, so `_setup()`'s worker hung indefinitely and `app.manager` was never assigned — `AssertionError: ConnectionManager should be created`. This test file predates the vault system (last touched at Phase 26 / v1.14.0; vault landed at Phase 39.1+ / v1.15.0+) and was never updated for it. Fixed by bypassing `ChatApp._unlock_vault` (returns an in-memory DEK directly, no modal) and isolating `VaultDatabase.unlock()` to a temp path — this file's stated scope is UI wiring, not the vault-unlock flow, which has its own dedicated tests.
+
 ## [1.15.6] — Bug fixes: executable detection & Open-block wiring
 
 ### Fixed
