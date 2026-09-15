@@ -1,4 +1,4 @@
-"""core/vault/session.py — Phase 39.3: session / auto-lock model.
+"""core/vault/session.py — Phase 39.3/39.4: session and Export auth model.
 
 Implements SECURE_STORAGE_DESIGN.md §4 (and the §11.4 default):
 
@@ -18,26 +18,37 @@ database working copy is flushed + destroyed (VaultDatabase.lock()).
 Re-unlock rebuilds a fresh VaultDatabase; callers (UI) rewire
 TrustStore / VaultPersistence onto the new connection.
 
-Critical-action key for Export (AND-gate HKDF) is Phase 39.4 — not here.
-Actual Open/Export/Delete UI gates land with file actions in 39.5; this
-module just exposes the authorization decisions those gates will call.
+Critical-action key for Export (AND-gate HKDF) is Phase 39.4. Actual
+Open/Export/Delete UI gates land with file actions in 39.5; this module
+just exposes the authorization decisions those gates will call.
 """
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import time
 from typing import Callable, Optional
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
 from .database import VaultDatabase
-from .keyfile import VaultKeyfile, unlock_with_passphrase
-from .crypto import WrongSecretError
+from .keyfile import VaultKeyfile, unlock_with_passphrase, validate_passphrase
+from .crypto import KEK_LEN, NONCE_LEN, WrongSecretError, derive_kek, new_salt
 
 # sudo's well-known default timestamp_timeout (§11.4 / §4).
 DEFAULT_AUTO_LOCK_SECONDS = 300.0
 
 SETTING_AUTO_LOCK_SECONDS = "auto_lock_timeout_seconds"
 SETTING_REQUIRE_PASSPHRASE_INCOMING = "require_passphrase_for_incoming"
+SETTING_CRITICAL_KEY_VERIFIER = "critical_key_verifier"
+
+CRITICAL_AUTH_INFO = b"peerc-critical-export-auth-v1"
+CRITICAL_VERIFIER_PLAINTEXT = b"peerc-critical-export-verifier-v1"
 
 # File actions that re-prompt by default (§4). Incoming Transfer is
 # deliberately not in this set.
@@ -197,6 +208,126 @@ class VaultSession:
                 for i in range(len(candidate)):
                     candidate[i] = 0
 
+    # ---- critical-action Export key (39.4) --------------------------
+
+    def critical_action_key_configured(self, keyfile: VaultKeyfile) -> bool:
+        """Whether Export has the optional second secret enabled.
+
+        The keyfile salts are the public marker; the verifier itself is
+        stored in the encrypted vault settings table.
+        """
+        return (
+            keyfile.critical_key_salt is not None
+            and keyfile.critical_key_verifier_salt is not None
+        )
+
+    def set_critical_action_key(
+        self,
+        keyfile: VaultKeyfile,
+        critical_secret: str,
+    ) -> VaultKeyfile:
+        """Enable the optional Export-only second secret.
+
+        Requires an unlocked session. Mutates and returns `keyfile`; the
+        caller is responsible for persisting it with save_vault_keyfile().
+        The verifier is committed into the encrypted vault DB immediately.
+        """
+        self._require_unlocked()
+        if self.critical_action_key_configured(keyfile):
+            raise ValueError(
+                "critical-action key is already configured; use change_critical_action_key()"
+            )
+        validate_passphrase(critical_secret)
+        self._write_critical_verifier(keyfile, critical_secret)
+        return keyfile
+
+    def change_critical_action_key(
+        self,
+        keyfile: VaultKeyfile,
+        old_critical_secret: str,
+        new_critical_secret: str,
+    ) -> VaultKeyfile:
+        """Replace the Export critical-action secret after proving the old one."""
+        self._require_unlocked()
+        if not self.verify_critical_action_key(keyfile, old_critical_secret):
+            raise WrongSecretError("wrong critical-action key")
+        validate_passphrase(new_critical_secret)
+        self._write_critical_verifier(keyfile, new_critical_secret)
+        return keyfile
+
+    def clear_critical_action_key(
+        self,
+        keyfile: VaultKeyfile,
+        critical_secret: str,
+    ) -> VaultKeyfile:
+        """Disable the Export critical-action secret after proving it."""
+        self._require_unlocked()
+        if not self.verify_critical_action_key(keyfile, critical_secret):
+            raise WrongSecretError("wrong critical-action key")
+        keyfile.critical_key_salt = None
+        keyfile.critical_key_verifier_salt = None
+        if self.vault_db is not None:
+            self.vault_db.conn.execute(
+                "DELETE FROM settings WHERE key = ?",
+                (SETTING_CRITICAL_KEY_VERIFIER,),
+            )
+            self.vault_db.conn.commit()
+        return keyfile
+
+    def verify_critical_action_key(
+        self,
+        keyfile: VaultKeyfile,
+        critical_secret: str,
+    ) -> bool:
+        """True iff the live session DEK and fresh critical secret combine.
+
+        This is the 39.4 AND-gate primitive: the critical secret alone
+        cannot authenticate because HKDF also uses the already-unlocked
+        session DEK; the live DEK alone cannot authenticate without the
+        freshly entered secret-derived KEK.
+        """
+        self._require_unlocked()
+        if not self.critical_action_key_configured(keyfile):
+            return False
+
+        record = self._read_setting(SETTING_CRITICAL_KEY_VERIFIER)
+        if not isinstance(record, dict):
+            return False
+        nonce_b64 = record.get("nonce")
+        ciphertext_b64 = record.get("ciphertext")
+        if not isinstance(nonce_b64, str) or not isinstance(ciphertext_b64, str):
+            return False
+
+        auth_key = bytearray(self._derive_critical_auth_key(keyfile, critical_secret))
+        try:
+            nonce = base64.b64decode(nonce_b64)
+            ciphertext = base64.b64decode(ciphertext_b64)
+            plaintext = AESGCM(bytes(auth_key)).decrypt(nonce, ciphertext, None)
+            return secrets_equal(plaintext, CRITICAL_VERIFIER_PLAINTEXT)
+        except (InvalidTag, ValueError):
+            return False
+        finally:
+            for i in range(len(auth_key)):
+                auth_key[i] = 0
+
+    def authorize_export(
+        self,
+        keyfile: VaultKeyfile,
+        critical_secret: Optional[str] = None,
+    ) -> bool:
+        """Return whether Export may proceed under the 39.4 auth primitive.
+
+        Unset by default: an unlocked session is enough. Once configured,
+        Export requires both the unlocked session and the freshly entered
+        critical-action secret.
+        """
+        self._require_unlocked()
+        if not self.critical_action_key_configured(keyfile):
+            return True
+        if critical_secret is None:
+            return False
+        return self.verify_critical_action_key(keyfile, critical_secret)
+
     # ---- settings (persisted in vault `settings` table) --------------
 
     def set_auto_lock_seconds(self, seconds: float) -> None:
@@ -261,6 +392,61 @@ class VaultSession:
         self.vault_db.conn.commit()
 
     # ---- internals ----------------------------------------------------
+
+    def _require_unlocked(self) -> None:
+        if self._dek is None or self.vault_db is None:
+            raise SessionLockedError("vault session is locked")
+
+    def _derive_critical_auth_key(self, keyfile: VaultKeyfile, critical_secret: str) -> bytes:
+        assert self._dek is not None
+        assert keyfile.critical_key_salt is not None
+        assert keyfile.critical_key_verifier_salt is not None
+
+        critical_kek = bytearray(
+            derive_kek(critical_secret.encode("utf-8"), keyfile.critical_key_salt)
+        )
+        try:
+            # HKDF input deliberately contains both sides of the AND gate:
+            # live session key material plus the freshly entered secret.
+            input_key_material = bytes(self._dek) + bytes(critical_kek)
+            return HKDF(
+                algorithm=hashes.SHA256(),
+                length=KEK_LEN,
+                salt=keyfile.critical_key_verifier_salt,
+                info=CRITICAL_AUTH_INFO,
+            ).derive(input_key_material)
+        finally:
+            for i in range(len(critical_kek)):
+                critical_kek[i] = 0
+
+    def _write_critical_verifier(
+        self,
+        keyfile: VaultKeyfile,
+        critical_secret: str,
+    ) -> None:
+        self._require_unlocked()
+        keyfile.critical_key_salt = new_salt()
+        keyfile.critical_key_verifier_salt = new_salt()
+
+        auth_key = bytearray(self._derive_critical_auth_key(keyfile, critical_secret))
+        try:
+            nonce = os.urandom(NONCE_LEN)
+            ciphertext = AESGCM(bytes(auth_key)).encrypt(
+                nonce,
+                CRITICAL_VERIFIER_PLAINTEXT,
+                None,
+            )
+            self._save_setting(
+                SETTING_CRITICAL_KEY_VERIFIER,
+                {
+                    "version": 1,
+                    "nonce": base64.b64encode(nonce).decode("ascii"),
+                    "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+                },
+            )
+        finally:
+            for i in range(len(auth_key)):
+                auth_key[i] = 0
 
     def _wipe_dek(self) -> None:
         if self._dek is not None:

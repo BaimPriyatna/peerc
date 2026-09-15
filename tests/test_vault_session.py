@@ -24,11 +24,15 @@ from core.vault import (
     DEFAULT_AUTO_LOCK_SECONDS,
     FILE_ACTIONS_REQUIRING_AUTH,
     SETTING_AUTO_LOCK_SECONDS,
+    SETTING_CRITICAL_KEY_VERIFIER,
     SessionLockedError,
     VaultDatabase,
     VaultPersistence,
     VaultSession,
+    WrongSecretError,
     create_vault,
+    load_vault_keyfile,
+    save_vault_keyfile,
     unlock_with_passphrase,
 )
 from core.events import EventBus, ChatMessageSent
@@ -167,6 +171,152 @@ def test_verify_passphrase_against_live_dek(tmp_path):
         session.lock()
     with pytest.raises(SessionLockedError):
         session.verify_passphrase(keyfile, "correct horse battery")
+
+
+def test_critical_action_key_unset_allows_export_with_unlocked_session(tmp_path):
+    keyfile_path = str(tmp_path / "vault_keyfile.json")
+    keyfile, _ = create_vault("correct horse battery", path=keyfile_path)
+    dek = unlock_with_passphrase(keyfile, "correct horse battery")
+
+    vault_db_path = str(tmp_path / "vault.db")
+    vdb = VaultDatabase.unlock(dek, vault_db_path=vault_db_path, force_fallback=True)
+    session = VaultSession(monotonic=FakeClock())
+    session.unlock(dek, vdb)
+    try:
+        assert session.critical_action_key_configured(keyfile) is False
+        assert session.authorize_export(keyfile) is True
+        assert session.verify_critical_action_key(keyfile, "unused secret") is False
+    finally:
+        session.lock()
+
+
+def test_critical_action_key_requires_session_and_fresh_secret(tmp_path):
+    keyfile_path = str(tmp_path / "vault_keyfile.json")
+    keyfile, _ = create_vault("correct horse battery", path=keyfile_path)
+    dek = unlock_with_passphrase(keyfile, "correct horse battery")
+
+    vault_db_path = str(tmp_path / "vault.db")
+    vdb = VaultDatabase.unlock(dek, vault_db_path=vault_db_path, force_fallback=True)
+    session = VaultSession(monotonic=FakeClock())
+    session.unlock(dek, vdb)
+    try:
+        session.set_critical_action_key(keyfile, "critical export secret")
+        assert keyfile.critical_key_salt is not None
+        assert keyfile.critical_key_verifier_salt is not None
+        assert session.critical_action_key_configured(keyfile) is True
+        assert session.authorize_export(keyfile) is False  # live DEK alone is not enough
+        assert session.authorize_export(keyfile, "wrong export secret") is False
+        assert session.authorize_export(keyfile, "critical export secret") is True
+        verifier_record = session.vault_db.conn.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (SETTING_CRITICAL_KEY_VERIFIER,),
+        ).fetchone()
+        assert verifier_record is not None
+    finally:
+        session.lock()
+
+    with pytest.raises(SessionLockedError):
+        session.authorize_export(keyfile, "critical export secret")
+
+
+def test_critical_action_secret_alone_is_not_enough(tmp_path):
+    keyfile_path = str(tmp_path / "vault_keyfile.json")
+    keyfile, _ = create_vault("correct horse battery", path=keyfile_path)
+    dek = unlock_with_passphrase(keyfile, "correct horse battery")
+
+    vault_db_path = str(tmp_path / "vault.db")
+    vdb = VaultDatabase.unlock(dek, vault_db_path=vault_db_path, force_fallback=True)
+    session = VaultSession(monotonic=FakeClock())
+    session.unlock(dek, vdb)
+    try:
+        session.set_critical_action_key(keyfile, "critical export secret")
+        verifier_json = session.vault_db.conn.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (SETTING_CRITICAL_KEY_VERIFIER,),
+        ).fetchone()[0]
+    finally:
+        session.lock()
+
+    other_dek = os.urandom(32)
+    other_vdb = VaultDatabase.unlock(
+        other_dek,
+        vault_db_path=str(tmp_path / "other_vault.db"),
+        force_fallback=True,
+    )
+    other_session = VaultSession(monotonic=FakeClock())
+    other_session.unlock(other_dek, other_vdb)
+    try:
+        other_session.vault_db.conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (SETTING_CRITICAL_KEY_VERIFIER, verifier_json),
+        )
+        other_session.vault_db.conn.commit()
+        assert other_session.authorize_export(keyfile, "critical export secret") is False
+    finally:
+        other_session.lock()
+
+
+def test_change_and_clear_critical_action_key(tmp_path):
+    keyfile_path = str(tmp_path / "vault_keyfile.json")
+    keyfile, _ = create_vault("correct horse battery", path=keyfile_path)
+    dek = unlock_with_passphrase(keyfile, "correct horse battery")
+
+    vault_db_path = str(tmp_path / "vault.db")
+    vdb = VaultDatabase.unlock(dek, vault_db_path=vault_db_path, force_fallback=True)
+    session = VaultSession(monotonic=FakeClock())
+    session.unlock(dek, vdb)
+    try:
+        session.set_critical_action_key(keyfile, "old critical secret")
+        with pytest.raises(WrongSecretError):
+            session.change_critical_action_key(
+                keyfile,
+                "wrong critical secret",
+                "new critical secret",
+            )
+        session.change_critical_action_key(
+            keyfile,
+            "old critical secret",
+            "new critical secret",
+        )
+        assert session.authorize_export(keyfile, "old critical secret") is False
+        assert session.authorize_export(keyfile, "new critical secret") is True
+
+        with pytest.raises(WrongSecretError):
+            session.clear_critical_action_key(keyfile, "old critical secret")
+        session.clear_critical_action_key(keyfile, "new critical secret")
+        assert session.critical_action_key_configured(keyfile) is False
+        assert session.authorize_export(keyfile) is True
+        row = session.vault_db.conn.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (SETTING_CRITICAL_KEY_VERIFIER,),
+        ).fetchone()
+        assert row is None
+    finally:
+        session.lock()
+
+
+def test_critical_action_key_persists_across_reunlock(tmp_path):
+    keyfile_path = str(tmp_path / "vault_keyfile.json")
+    keyfile, _ = create_vault("correct horse battery", path=keyfile_path)
+    dek = unlock_with_passphrase(keyfile, "correct horse battery")
+
+    vault_db_path = str(tmp_path / "vault.db")
+    vdb = VaultDatabase.unlock(dek, vault_db_path=vault_db_path, force_fallback=True)
+    session = VaultSession(monotonic=FakeClock())
+    session.unlock(dek, vdb)
+    session.set_critical_action_key(keyfile, "critical export secret")
+    save_vault_keyfile(keyfile, keyfile_path)
+    session.lock()
+
+    loaded = load_vault_keyfile(keyfile_path)
+    vdb2 = VaultDatabase.unlock(dek, vault_db_path=vault_db_path, force_fallback=True)
+    session2 = VaultSession(monotonic=FakeClock())
+    session2.unlock(dek, vdb2)
+    try:
+        assert session2.critical_action_key_configured(loaded) is True
+        assert session2.authorize_export(loaded, "critical export secret") is True
+    finally:
+        session2.lock()
 
 
 def test_persisted_autolock_survives_relock(tmp_path):

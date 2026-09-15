@@ -252,7 +252,7 @@ encryption, encrypted database with chat/transfer persistence, and
 session/auto-lock) complete. Messages and file transfers are saved
 locally, encrypted at rest; the vault hard-locks after idle (default
 5 min) or on `/lock` / Ctrl+L.
-Next planned: Phase 39.4 (critical-action Export key), Phase 42 (Group
+Next planned: Phase 39.5 (file actions / secure storage), Phase 42 (Group
 Authority System).
 
 ---

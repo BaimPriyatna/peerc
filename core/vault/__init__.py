@@ -9,8 +9,10 @@
 39.3: Session / auto-lock model (idle timeout, hard lock, file-action
       re-auth policy, settings). See §4 / §11.4.
 
+39.4: Critical-action Export key primitive (optional second secret,
+      AND-gated with the unlocked session via HKDF).
+
 Not yet implemented here (later Phase 39 sub-steps):
-  - the critical-action key for Export, AND-gate HKDF combining (39.4)
   - file actions: Open/Export/Move-to-Secure/Delete, magic-byte
     executable detection (39.5)
 """
@@ -46,6 +48,7 @@ from .session import (
     DEFAULT_AUTO_LOCK_SECONDS,
     FILE_ACTIONS_REQUIRING_AUTH,
     SETTING_AUTO_LOCK_SECONDS,
+    SETTING_CRITICAL_KEY_VERIFIER,
     SETTING_REQUIRE_PASSPHRASE_INCOMING,
     SessionLockedError,
     VaultSession,
@@ -65,6 +68,7 @@ __all__ = [
     "DEFAULT_AUTO_LOCK_SECONDS",
     "FILE_ACTIONS_REQUIRING_AUTH",
     "SETTING_AUTO_LOCK_SECONDS",
+    "SETTING_CRITICAL_KEY_VERIFIER",
     "SETTING_REQUIRE_PASSPHRASE_INCOMING",
     "VaultError",
     "VaultExistsError",

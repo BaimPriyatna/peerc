@@ -21,6 +21,8 @@ Commands typed into the input box:
     /info or /me                    show local identity and network details
     /lock                           lock the vault now (re-prompt for passphrase)
     /autolock [minutes]             show or set idle auto-lock timeout (default 5)
+    /criticalkey [status|set|change|clear]
+                                    manage optional extra key for Export
     /quit or /exit                  quit peerc
 
 Cursor & Mouse:
@@ -67,10 +69,12 @@ from core.vault import (
     VaultExistsError,
     VaultPersistence,
     VaultSession,
+    WeakPassphraseError,
     WrongSecretError,
     create_vault,
     load_vault_keyfile,
     migrate_plaintext_trust_db,
+    save_vault_keyfile,
     unlock_with_passphrase,
     unlock_with_recovery_code,
     vault_exists,
@@ -280,6 +284,92 @@ class VaultUnlockModal(ModalScreen[tuple[str, str]]):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss((self.mode, event.value))
+
+
+class CriticalActionKeyModal(ModalScreen[Optional[tuple[str, ...]]]):
+    """Collect the optional Export critical-action key without keeping it
+    in app state. The caller immediately hands it to VaultSession."""
+
+    def __init__(self, mode: str, error: str = ""):
+        super().__init__()
+        if mode not in {"set", "change", "clear", "export"}:
+            raise ValueError("unknown critical-action modal mode")
+        self.mode = mode
+        self.error = error
+
+    def compose(self) -> ComposeResult:
+        title = {
+            "set": "Set Export critical-action key",
+            "change": "Change Export critical-action key",
+            "clear": "Clear Export critical-action key",
+            "export": "Authorize Export",
+        }[self.mode]
+        with Vertical(id="vault-dialog"):
+            yield Label(title)
+            yield Label(self._body_text())
+            yield Label(self.error, id="vault-error")
+            if self.mode == "change":
+                yield Input(placeholder="Current critical-action key", password=True, id="critical-old")
+                yield Input(placeholder="New critical-action key", password=True, id="critical-new")
+                yield Input(placeholder="Confirm new key", password=True, id="critical-confirm")
+            elif self.mode == "set":
+                yield Input(placeholder="Critical-action key", password=True, id="critical-new")
+                yield Input(placeholder="Confirm key", password=True, id="critical-confirm")
+            else:
+                yield Input(placeholder="Critical-action key", password=True, id="critical-current")
+            with Horizontal():
+                yield Button(self._submit_label(), id="critical-submit", variant=self._submit_variant())
+                yield Button("Cancel", id="critical-cancel")
+
+    def _body_text(self) -> str:
+        if self.mode == "export":
+            return "Export requires the extra key configured for this vault."
+        if self.mode == "clear":
+            return "Enter the current key once to remove the extra Export gate."
+        return "This optional key is required in addition to the unlocked session for Export."
+
+    def _submit_label(self) -> str:
+        return {
+            "set": "Set Key",
+            "change": "Change Key",
+            "clear": "Clear Key",
+            "export": "Authorize",
+        }[self.mode]
+
+    def _submit_variant(self) -> str:
+        return "error" if self.mode == "clear" else "success"
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "critical-cancel":
+            self.dismiss(None)
+            return
+        if event.button.id == "critical-submit":
+            self._submit()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._submit()
+
+    def _submit(self) -> None:
+        error_label = self.query_one("#vault-error", Label)
+        if self.mode == "change":
+            old = self.query_one("#critical-old", Input).value
+            new = self.query_one("#critical-new", Input).value
+            confirm = self.query_one("#critical-confirm", Input).value
+            if new != confirm:
+                error_label.update("New keys don't match.")
+                return
+            self.dismiss((old, new))
+            return
+        if self.mode == "set":
+            new = self.query_one("#critical-new", Input).value
+            confirm = self.query_one("#critical-confirm", Input).value
+            if new != confirm:
+                error_label.update("Keys don't match.")
+                return
+            self.dismiss((new,))
+            return
+        current = self.query_one("#critical-current", Input).value
+        self.dismiss((current,))
 
 
 class FileOfferModal(ModalScreen[bool]):
@@ -531,6 +621,95 @@ class ChatApp(App):
         """Phase 39.3: any real user activity resets the idle timer."""
         if self.vault_session is not None:
             self.vault_session.touch()
+
+    def _critical_key_status_text(self) -> str:
+        if self.vault_session is None:
+            return "unknown"
+        keyfile = load_vault_keyfile()
+        return (
+            "enabled"
+            if self.vault_session.critical_action_key_configured(keyfile)
+            else "not set"
+        )
+
+    async def _prompt_for_export_authorization(self) -> bool:
+        """Phase 39.4 UI hook for Phase 39.5's actual Export command."""
+        if self.vault_session is None or not self.vault_session.is_unlocked:
+            raise RuntimeError("vault must be unlocked before Export authorization")
+        keyfile = load_vault_keyfile()
+        if not self.vault_session.critical_action_key_configured(keyfile):
+            return True
+        result = await self.push_screen_wait(CriticalActionKeyModal("export"))
+        if result is None:
+            return False
+        return self.vault_session.authorize_export(keyfile, result[0])
+
+    async def _handle_critical_key_command(self, arg: str) -> None:
+        if self.vault_session is None or not self.vault_session.is_unlocked:
+            self._log("[red]Vault is locked — unlock first.[/red]")
+            return
+
+        action = (arg or "status").lower()
+        keyfile = load_vault_keyfile()
+        configured = self.vault_session.critical_action_key_configured(keyfile)
+
+        if action in ("status", "show"):
+            state = "enabled" if configured else "not set"
+            self._log(f"[cyan]Export critical-action key: {state}.[/cyan]")
+            return
+
+        if action == "set":
+            if configured:
+                self._log("[yellow]Critical-action key is already set. Use /criticalkey change or clear.[/yellow]")
+                return
+            result = await self.push_screen_wait(CriticalActionKeyModal("set"))
+            if result is None:
+                self._log("[dim]Critical-action key setup cancelled.[/dim]")
+                return
+            try:
+                self.vault_session.set_critical_action_key(keyfile, result[0])
+                save_vault_keyfile(keyfile)
+                self._log("[green]Export critical-action key enabled.[/green]")
+            except WeakPassphraseError as e:
+                self._log(f"[red]{e}[/red]")
+            return
+
+        if action == "change":
+            if not configured:
+                self._log("[yellow]No critical-action key is set. Use /criticalkey set first.[/yellow]")
+                return
+            result = await self.push_screen_wait(CriticalActionKeyModal("change"))
+            if result is None:
+                self._log("[dim]Critical-action key change cancelled.[/dim]")
+                return
+            try:
+                old_secret, new_secret = result
+                self.vault_session.change_critical_action_key(keyfile, old_secret, new_secret)
+                save_vault_keyfile(keyfile)
+                self._log("[green]Export critical-action key changed.[/green]")
+            except WeakPassphraseError as e:
+                self._log(f"[red]{e}[/red]")
+            except WrongSecretError:
+                self._log("[red]Incorrect current critical-action key.[/red]")
+            return
+
+        if action == "clear":
+            if not configured:
+                self._log("[cyan]No critical-action key is set.[/cyan]")
+                return
+            result = await self.push_screen_wait(CriticalActionKeyModal("clear"))
+            if result is None:
+                self._log("[dim]Critical-action key clear cancelled.[/dim]")
+                return
+            try:
+                self.vault_session.clear_critical_action_key(keyfile, result[0])
+                save_vault_keyfile(keyfile)
+                self._log("[green]Export critical-action key cleared.[/green]")
+            except WrongSecretError:
+                self._log("[red]Incorrect critical-action key.[/red]")
+            return
+
+        self._log("[yellow]Usage: /criticalkey [status|set|change|clear][/yellow]")
 
     def _perform_hard_lock(self) -> None:
         """Detach dependents, wipe DEK, flush+destroy the working copy.
@@ -848,6 +1027,7 @@ class ChatApp(App):
             self._log(" [bold cyan]/info[/bold cyan] or [bold cyan]/me[/bold cyan]           Show self identity & network details")
             self._log(" [bold cyan]/lock[/bold cyan]                 Lock vault now (Ctrl+L); re-prompt for passphrase")
             self._log(" [bold cyan]/autolock [minutes][/bold cyan]  Show/set idle auto-lock (default 5; 0 = off)")
+            self._log(" [bold cyan]/criticalkey [action][/bold cyan] Manage optional Export extra key")
             self._log(" [bold cyan]/quit[/bold cyan] or [bold cyan]/exit[/bold cyan]          Exit application")
             self._log("[bold yellow]╚═══════════════════════ Shortcuts ══════════════════════╝[/bold yellow]")
             self._log(" [dim]• Block text with mouse cursor, then press Ctrl+C or Ctrl+Shift+C to copy[/dim]")
@@ -1033,6 +1213,10 @@ class ChatApp(App):
                     f"  [bold]Vault:[/bold]      "
                     f"{'unlocked' if self.vault_session.is_unlocked else 'locked'}"
                 )
+                self._log(
+                    f"  [bold]Export key:[/bold] "
+                    f"{self._critical_key_status_text()}"
+                )
             self._log("[bold yellow]╚═══════════════════════════════════════════════════╝[/bold yellow]")
 
         elif cmd == "/lock":
@@ -1065,6 +1249,9 @@ class ChatApp(App):
                 self._log("[green]Auto-lock disabled. /lock still works.[/green]")
             else:
                 self._log(f"[green]Auto-lock set to {minutes:g} minute(s) idle.[/green]")
+
+        elif cmd == "/criticalkey":
+            await self._handle_critical_key_command(arg)
 
         elif cmd in ("/quit", "/exit", "/q"):
             self.exit()

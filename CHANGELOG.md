@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.15.4] — Phase 39.4: Critical-action Export key primitive
+
+### Added
+- **`core/vault/session.py`**: critical-action Export auth primitive.
+  `VaultSession` can now set/change/clear the optional Export-only
+  critical-action key, verify it against the live unlocked session, and
+  expose `authorize_export()` for Phase 39.5's actual Export call path.
+  The gate is an AND, not an OR: HKDF combines the live session DEK
+  material with a freshly entered critical-action secret, then uses an
+  AES-GCM verifier so neither half authenticates alone.
+- **Keyfile / vault DB integration**: the reserved
+  `VaultKeyfile.critical_key_salt` and
+  `critical_key_verifier_salt` fields now mark/configure the critical
+  key. The AEAD verifier record is stored in the encrypted vault
+  `settings` table as `critical_key_verifier`; callers still persist the
+  mutated keyfile via `save_vault_keyfile()`.
+- **Tests**: `tests/test_vault_session.py` covers unset-by-default
+  behavior, live-session-only rejection, critical-secret-only rejection,
+  wrong-key rejection, change/clear flows, lock-state rejection, and
+  persistence across lock → re-unlock.
+- **Not part of this sub-step:** actual Open/Export/Delete secure-file
+  I/O, Export destination handling, settings UI, and Export prompt UI
+  remain Phase 39.5.
+
 ## [1.15.3] — Phase 39.3: Session / auto-lock model
 
 ### Added
