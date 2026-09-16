@@ -245,7 +245,7 @@ The full suite also runs automatically in CI on every push to `main`. See `.gith
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for phased progress and [`CHANGELOG.md`](CHANGELOG.md) for a full version history.
 
-Current version: **1.16.0** — Phase 39 (Secure Storage) complete! All 5
+Current version: **1.16.1** — Phase 39 (Secure Storage) complete! All 5
 sub-steps done: vault envelope encryption, encrypted database with
 chat/transfer persistence, session/auto-lock model, critical-action Export
 key, and file actions (Open/Export/Delete/Move with executable detection).

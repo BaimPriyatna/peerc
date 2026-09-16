@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **1.16.0** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.16.1** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
