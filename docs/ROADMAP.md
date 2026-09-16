@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **1.15.7** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.16.0** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
@@ -41,6 +41,7 @@ development into maintenance/updates, not before.
 | `1.15.5` | 39.5 | `core/vault/secure_file.py`, `file_actions.py`, `executable_detection.py` [NEW]: per-file AES-256-GCM encryption with HKDF-derived keys, opaque secure_id naming; Open/Export/Delete/Move operations with VaultSession re-auth integration; magic-byte executable detection (PE/ELF/Mach-O/shebang); `ui.py` gains `/files`/`/open`/`/export`/`/secure`/`/delete` commands; 68 tests across 3 test files |
 | `1.15.6` | 39.5 | Bug fixes: `is_executable()` fail-closed logic corrected for strict mode (inconclusive content now always blocks, extension/content mismatches now caught); `.bin` removed from `EXECUTABLE_EXTENSIONS`; `open_secure_file()` now catches `ExecutableDetectionError` from `check_executable_for_open` (previously only caught `ExecutableBlockedError`, so blocked-open temp files leaked undeleted and `ui.py`'s block message never fired); detected file type now surfaced in the block message before temp-file cleanup instead of being read afterward |
 | `1.15.7` | 39.5 | `tests/test_stage5.py`: fixed a stale test-isolation gap — the headless UI smoke test never isolated the vault path (only identity), so on any machine without a pre-existing `~/.peerc` it hung forever waiting on `VaultCreateModal`'s interactive passphrase prompt. Now bypasses `ChatApp._unlock_vault` and isolates `VaultDatabase.unlock()` to a temp path, since this file only smoke-tests UI wiring, not the vault-unlock flow itself |
+| `1.16.0` | 42.1 | `core/group/` [NEW]: `membership.py` — `Group`/`MembershipCertificate` dataclasses, Ed25519-signed issue/verify (admin's existing device identity, no new key type), `is_membership_expired()`; `store.py` — `GroupStore` (mirrors `TrustStore`'s shared-connection pattern), refuses to record a membership with an unverifiable signature, an admin/group mismatch, or a duplicate; `groups`/`group_memberships` tables added to `VaultDatabase`'s unified schema; `ui.py` wires `group_store` through the same lock/unlock lifecycle as `trust_store`. No policy enforcement or UI commands yet (`policy.py`/`admin.py`/`audit.py` are later 42.x sub-steps) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -54,7 +55,6 @@ complete.**
 
 | Phase | What | Where |
 |---|---|---|
-| 42 | Group Authority System (admin-managed membership, policy enforced in core, multi-admin threshold signatures, audit log) | `GROUP_AUTHORITY_DESIGN.md` |
 | 43 | Group-Gated Export Authorization (admin capability AND personal critical-action key, not either/or) | `GROUP_AUTHORITY_DESIGN.md` §Export Authorization |
 | 44 | Internet P2P Connectivity (Identity/Locator separation, signed Endpoint Update) | `INTERNET_CONNECTIVITY_DESIGN.md` |
 | 45 | Rendezvous Service (optional, endpoint discovery only, never a data path) | `INTERNET_CONNECTIVITY_DESIGN.md` §Rendezvous |
@@ -75,7 +75,7 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. **Phase 42 — Group Authority System** (design-complete) ← next
+1. **Phase 42 — Group Authority System** (in progress: 42.1 `membership.py`+storage landed as `1.16.0`; `policy.py`/`admin.py`/`audit.py` still to come) ← next
 2. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
 3. **Phase 44 — Internet P2P Connectivity** (design-complete)
 3. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)

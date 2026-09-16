@@ -44,8 +44,10 @@ DEFAULT_FLUSH_INTERVAL = 30.0  # seconds (§17)
 
 # Unified schema (§12): Phase 4's trusted_devices (+ Phase 40's
 # identity_transitions, added after this design doc was first written)
-# plus Phase 27's messages/transfers/settings, all in one encrypted file
-# instead of running two separate encrypt/flush lifecycles in parallel.
+# plus Phase 27's messages/transfers/settings, plus Phase 42's
+# groups/group_memberships (per the Phase 42.1 discuss-before-build
+# decision: group data lives in this same encrypted file too, not a
+# separate DB — the vault is always unlocked before this code runs).
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS trusted_devices (
     device_id     TEXT PRIMARY KEY,
@@ -91,6 +93,29 @@ CREATE TABLE IF NOT EXISTS transfers (
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS groups (
+    group_id         TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    admin_device_id  TEXT NOT NULL,
+    admin_public_key TEXT NOT NULL,
+    created_at       REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS group_memberships (
+    group_id          TEXT NOT NULL,
+    device_id         TEXT NOT NULL,
+    device_public_key TEXT NOT NULL,
+    role              TEXT NOT NULL,
+    permissions       TEXT NOT NULL,
+    issued_at         REAL NOT NULL,
+    expires_at        REAL,
+    admin_device_id   TEXT NOT NULL,
+    signature         TEXT NOT NULL,
+    status            TEXT NOT NULL,
+    revoked_by        TEXT,
+    revoked_at        REAL,
+    revoke_reason     TEXT,
+    PRIMARY KEY (group_id, device_id)
 );
 """
 

@@ -62,6 +62,7 @@ import file_transfer
 import protocol
 from core.trust.store import DEFAULT_DB_PATH as TRUST_DB_LEGACY_PATH
 from core.trust.store import TrustStore
+from core.group import GroupStore
 from core.vault import (
     DEFAULT_AUTO_LOCK_SECONDS,
     RecoveryCodeError,
@@ -445,6 +446,7 @@ class ChatApp(App):
         self.public_key_bytes: bytes = b""
         self.my_identity = None  # DeviceKeypair, set in on_mount (BUG-004)
         self.trust_store: Optional[TrustStore] = None
+        self.group_store: Optional[GroupStore] = None
         self.vault_db = None  # VaultDatabase, set in on_mount (Phase 39.2)
         self.vault_persistence = None  # VaultPersistence, set in on_mount (Phase 39.2)
         self.vault_session = None  # VaultSession, set in on_mount (Phase 39.3)
@@ -517,6 +519,10 @@ class ChatApp(App):
         # plaintext trust.db (which migrate_plaintext_trust_db() above
         # just retired if one existed).
         self.trust_store = TrustStore(conn=self.vault_db.conn)
+
+        # Phase 42.1: group/membership rows share the same vault
+        # connection, same reasoning as TrustStore above.
+        self.group_store = GroupStore(conn=self.vault_db.conn)
 
         self.manager = ConnectionManager(
             listen_port=UI_TCP_PORT,
@@ -615,6 +621,8 @@ class ChatApp(App):
                 self.vault_persistence.reattach(None)
             if self.trust_store is not None:
                 self.trust_store.adopt_conn(None)
+            if self.group_store is not None:
+                self.group_store.adopt_conn(None)
             self.vault_session.lock()
             self.vault_db = None
         elif self.vault_db is not None:
@@ -981,6 +989,8 @@ class ChatApp(App):
             self.vault_persistence.reattach(None)
         if self.trust_store is not None:
             self.trust_store.adopt_conn(None)
+        if self.group_store is not None:
+            self.group_store.adopt_conn(None)
         if self.vault_session is not None and self.vault_session.is_unlocked:
             self.vault_session.lock()
         self.vault_db = None
@@ -1023,6 +1033,8 @@ class ChatApp(App):
             self.vault_session.unlock(dek, self.vault_db)
             if self.trust_store is not None:
                 self.trust_store.adopt_conn(self.vault_db.conn)
+            if self.group_store is not None:
+                self.group_store.adopt_conn(self.vault_db.conn)
             if self.vault_persistence is not None:
                 self.vault_persistence.reattach(self.vault_db)
             self._log("[green]Vault unlocked.[/green]")

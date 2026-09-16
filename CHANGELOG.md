@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.16.0] — Phase 42.1: Group Authority System — membership certificates + storage
+
+### Added
+- **`core/group/membership.py`**: `Group` dataclass (a group's identity — just the trust anchor `admin_public_key`, membership lives elsewhere) and `MembershipCertificate` dataclass. `issue_membership_certificate()`/`verify_membership_certificate()` follow the same Ed25519 domain-separated-payload pattern as `core/identity/rotation.py`'s `TransitionCertificate` — an admin is just a device whose public key is additionally recorded as a group's authority, not a new key type. `is_membership_expired()` for optional TTL-based expiry (`expires_at=None` means never expires).
+- **`core/group/store.py`**: `GroupStore`, mirroring `core/trust/store.py`'s `TrustStore` shared-connection pattern exactly (default owns its own `db_path`, or shares an already-open `conn`). `record_membership()` verifies the certificate's signature against the group's recorded admin public key before writing — refuses an unverifiable signature, an admin/group mismatch (a cert signed by someone other than the group's recorded admin), or a duplicate `(group_id, device_id)` membership.
+- **`core/vault/database.py`**: `groups`/`group_memberships` tables added to `VaultDatabase`'s unified schema (§12) — per the Phase 42.1 discuss-before-build decision, group data lives in the same encrypted vault file as everything else, not a separate DB.
+- **`ui.py`**: `self.group_store` wired through the exact same lock/unlock/hard-lock lifecycle as `self.trust_store` (`adopt_conn(None)` on lock, `adopt_conn(self.vault_db.conn)` on re-unlock).
+- 18 new tests (`tests/test_group_membership.py`, `tests/test_vault_group_integration.py`) covering issue/verify (happy path, tampered cert, wrong verifying key), expiry, `GroupStore` CRUD + refusal paths, and vault-connection sharing/persistence across flush+lock+re-unlock.
+
+No policy enforcement or UI commands yet — `policy.py` (schema + core-level enforcement, including the External Trust Restriction wiring into `TrustStore.record_first_seen()`), `admin.py` (multi-admin, k-of-n threshold signatures), and `audit.py` (signed audit log) are later Phase 42.x sub-steps.
+
 ## [1.15.7] — Fix stale vault isolation in the Stage 5 UI smoke test
 
 ### Fixed
