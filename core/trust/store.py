@@ -26,13 +26,15 @@ import enum
 import os
 import sqlite3
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
+from core.group.policy import ExternalTrustDeniedError, PolicyEnforcer
 from core.security import SecurityEvent, SecurityEventType, SecuritySeverity, emit
 from .device import TrustedDevice, TrustStatus
 
 if TYPE_CHECKING:
     from core.identity.rotation import TransitionCertificate
+    from core.group.store import GroupStore
 
 DEFAULT_DB_PATH = os.path.expanduser("~/.peerc/trust.db")
 
@@ -70,14 +72,26 @@ class TrustDecision(str, enum.Enum):
 
 
 class TrustStore:
-    def __init__(self, db_path: str = DEFAULT_DB_PATH, conn: Optional[sqlite3.Connection] = None):
+    def __init__(
+        self,
+        db_path: str = DEFAULT_DB_PATH,
+        conn: Optional[sqlite3.Connection] = None,
+        group_store: Optional[Any] = None,
+        policy_enforcer: Optional[PolicyEnforcer] = None,
+    ):
         """conn, if given, is an already-open connection to share (Phase
         39.2: the unified vault database) — db_path is ignored in that
         case, and this instance does NOT own/close that connection; the
         owner (e.g. VaultDatabase) is responsible for that. When conn is
         None (the default, and every pre-Phase-39.2 call site), behavior
-        is unchanged: TrustStore opens and owns its own db_path file."""
+        is unchanged: TrustStore opens and owns its own db_path file.
+
+        Phase 42.2: group_store and policy_enforcer allow TrustStore to
+        enforce External Trust Restriction (§6) on record_first_seen().
+        """
         self.db_path = db_path
+        self._group_store = group_store
+        self._policy_enforcer = policy_enforcer
         if conn is not None:
             self._conn = conn
             self._owns_conn = False
@@ -90,6 +104,24 @@ class TrustStore:
         self._conn.row_factory = sqlite3.Row
         self._require_conn().executescript(_SCHEMA)
         self._require_conn().commit()
+
+    def set_group_store(self, group_store: Optional[Any]) -> None:
+        """Wire or update GroupStore reference for policy enforcement (§6)."""
+        self._group_store = group_store
+        if self._policy_enforcer is not None:
+            self._policy_enforcer.set_group_store(group_store)
+
+    def set_policy_enforcer(self, policy_enforcer: Optional[PolicyEnforcer]) -> None:
+        """Wire or update PolicyEnforcer directly."""
+        self._policy_enforcer = policy_enforcer
+
+    def _get_policy_enforcer(self) -> Optional[PolicyEnforcer]:
+        if self._policy_enforcer is not None:
+            return self._policy_enforcer
+        if self._group_store is not None:
+            self._policy_enforcer = PolicyEnforcer(self._group_store)
+            return self._policy_enforcer
+        return None
 
     def close(self) -> None:
         if self._owns_conn and self._conn is not None:
@@ -167,12 +199,24 @@ class TrustStore:
         """Insert a brand-new device as PENDING. Caller should only call
         this after check() returned UNKNOWN — calling it for a device_id
         that already exists raises, rather than silently overwriting a
-        possibly-different stored public_key."""
+        possibly-different stored public_key.
+
+        Phase 42.2: External Trust Restriction (§6). If group policy
+        enforces allow_external_trust=False and device_id is not an active
+        member of that group, raises ExternalTrustDeniedError and emits a
+        POLICY_VIOLATION security event before anything is written.
+        """
         if self.get(device_id) is not None:
             raise ValueError(
                 f"device_id {device_id!r} is already known — use check() first; "
                 "record_first_seen() must not overwrite an existing entry"
             )
+
+        # Enforce group policy (§6 External Trust Restriction)
+        enforcer = self._get_policy_enforcer()
+        if enforcer is not None:
+            enforcer.check_external_trust(device_id)
+
         now = time.time()
         self._require_conn().execute(
             "INSERT INTO trusted_devices (device_id, public_key, name, first_seen, last_seen, status) "

@@ -8,7 +8,7 @@
 [![Tests](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml/badge.svg)](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.16.0-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.16.1-informational.svg)](CHANGELOG.md)
 
 A terminal-based peer-to-peer chat and file transfer application. No central server — peers discover each other directly over the local network (LAN or WiFi hotspot) and communicate directly over encrypted TCP connections.
 

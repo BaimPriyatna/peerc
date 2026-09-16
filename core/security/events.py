@@ -101,6 +101,7 @@ class SecurityEventType(str, enum.Enum):
     # INFO
     ENDPOINT_CHANGED = "endpoint_changed"
     KEY_ROTATION = "key_rotation"
+    POLICY_CHANGED = "policy_changed"
 
     # WARNING
     UNKNOWN_DEVICE = "unknown_device"
@@ -113,6 +114,7 @@ class SecurityEventType(str, enum.Enum):
     REPEATED_AUTH_FAILURES = "repeated_auth_failures"
     REPLAY_DETECTED = "replay_detected"
     SUSPICIOUS_AUTHORIZATION = "suspicious_authorization"
+    POLICY_VIOLATION = "policy_violation"
 
     # CRITICAL
     ADMIN_KEY_COMPROMISE = "admin_key_compromise"

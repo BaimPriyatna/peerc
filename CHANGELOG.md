@@ -5,7 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-## [1.16.0] — Phase 42.1: Group Authority System — membership certificates + storage
+## [1.16.1] — Group Authority System — policy schema & core-level enforcement
+
+### Added
+- **`core/group/policy.py`** [NEW]: Group Authority policy schema and core-level enforcement (`GROUP_AUTHORITY_DESIGN.md` §5, §6, §7, §8, §10):
+  - `GroupPolicy`: Schema defining `allow_external_trust`, `allow_export`, `leave_requires_admin`, `allow_inter_group`, and `communication_matrix`. Includes serialization (`to_dict`/`from_dict`) and deterministic `canonical_payload()` for Ed25519 signatures (`_POLICY_DOMAIN = b"peerc-group-policy\x00"`).
+  - `CommunicationRule` & `PolicyAction` & `PolicyEffect`: Fine-grained Communication Policy Matrix (§7) supporting wildcard, role-based, device-based, and group-based access control across actions (`CHAT`, `FILE_SEND`, `FILE_RECEIVE`, `EXPORT`, `TRUST`, `GROUP_JOIN`, `GROUP_LEAVE`).
+  - Exceptions: `PolicyViolationError`, `ExternalTrustDeniedError`, `ExportDeniedError`, `LeaveRequiresAdminError`, `InterGroupDeniedError`, `CommunicationDeniedError`.
+  - `PolicyEnforcer`: Core-level policy evaluation ensuring decisions are enforced at storage and protocol boundaries, failing closed.
+- **External Trust Restriction (§6)**:
+  - Wired into `core/trust/store.py`'s `TrustStore.record_first_seen()`: When an active group policy enforces `allow_external_trust=False`, any device that is not an active, non-expired member (or admin) of the group is refused with `ExternalTrustDeniedError` before insertion into `trusted_devices`.
+  - Emits high-severity `POLICY_VIOLATION` security event.
+- **`core/security/events.py`**: Added `POLICY_VIOLATION` (severity HIGH) and `POLICY_CHANGED` (severity INFO) to `SecurityEventType`.
+- **`core/group/store.py` & `core/vault/database.py`**:
+  - `group_policies` table added to SQLite schema and unified encrypted vault schema.
+  - `GroupStore.set_policy()`, `get_policy()`, and `list_policies()` added with group existence and admin validation.
+- **`ui.py`**: Wired `self.trust_store.set_group_store(self.group_store)` across app lifecycle (on_mount and unlock).
+- **Packaging**: Added `core.group` to `[tool.setuptools]` packages in `pyproject.toml`.
+- 18 new tests (`tests/test_group_policy.py`, `tests/test_trust_group_policy.py`) covering policy defaults, serialization, communication matrix matching, core enforcements (external trust, export, leave, inter-group, communication rules), vault persistence, and `TrustStore.record_first_seen()` restriction.
+
+## [1.16.0] — Group Authority System — membership certificates + storage
 
 ### Added
 - **`core/group/membership.py`**: `Group` dataclass (a group's identity — just the trust anchor `admin_public_key`, membership lives elsewhere) and `MembershipCertificate` dataclass. `issue_membership_certificate()`/`verify_membership_certificate()` follow the same Ed25519 domain-separated-payload pattern as `core/identity/rotation.py`'s `TransitionCertificate` — an admin is just a device whose public key is additionally recorded as a group's authority, not a new key type. `is_membership_expired()` for optional TTL-based expiry (`expires_at=None` means never expires).

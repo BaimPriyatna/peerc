@@ -524,6 +524,9 @@ class ChatApp(App):
         # connection, same reasoning as TrustStore above.
         self.group_store = GroupStore(conn=self.vault_db.conn)
 
+        # Phase 42.2: wire group_store into trust_store for External Trust Restriction (§6)
+        self.trust_store.set_group_store(self.group_store)
+
         self.manager = ConnectionManager(
             listen_port=UI_TCP_PORT,
             my_identity=self.my_identity,
@@ -1035,6 +1038,8 @@ class ChatApp(App):
                 self.trust_store.adopt_conn(self.vault_db.conn)
             if self.group_store is not None:
                 self.group_store.adopt_conn(self.vault_db.conn)
+            if self.trust_store is not None and self.group_store is not None:
+                self.trust_store.set_group_store(self.group_store)
             if self.vault_persistence is not None:
                 self.vault_persistence.reattach(self.vault_db)
             self._log("[green]Vault unlocked.[/green]")

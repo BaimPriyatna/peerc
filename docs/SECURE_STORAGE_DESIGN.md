@@ -42,10 +42,10 @@ use):
                               │
                               ▼
                     ┌──────────────────┐
-                    │   DEK (AES-256)   │   ← actually encrypts data
+                    │   DEK (AES-256)  │   ← actually encrypts data
                     └──────────────────┘
                        │              │
-             wrapped by │              │ wrapped by
+            wrapped by │              │ wrapped by
                        ▼              ▼
               KEK(passphrase)   KEK(recovery code)
                        │              │

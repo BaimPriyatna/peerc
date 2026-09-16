@@ -75,7 +75,7 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. **Phase 42 — Group Authority System** (in progress: 42.1 `membership.py`+storage landed as `1.16.0`; `policy.py`/`admin.py`/`audit.py` still to come) ← next
+1. **Phase 42 — Group Authority System** (in progress: 42.1 `membership.py`+storage landed as `1.16.0`; 42.2 `policy.py`+enforcement landed as `1.16.1`; `admin.py`/`audit.py` still to come) ← next
 2. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
 3. **Phase 44 — Internet P2P Connectivity** (design-complete)
 3. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)

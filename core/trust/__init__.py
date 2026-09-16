@@ -8,7 +8,7 @@
 
 from .device import TrustedDevice, TrustStatus
 from .revocation import RevocationError, is_revoked, revoke_device
-from .store import DEFAULT_DB_PATH, TrustDecision, TrustStore
+from .store import DEFAULT_DB_PATH, ExternalTrustDeniedError, TrustDecision, TrustStore
 
 __all__ = [
     "TrustedDevice",
@@ -19,7 +19,8 @@ __all__ = [
     "DEFAULT_DB_PATH",
     "TrustDecision",
     "TrustStore",
-    # Phase 40 — key rotation (methods on TrustStore, re-exported for convenience)
+    "ExternalTrustDeniedError",
+    # key rotation (methods on TrustStore, re-exported for convenience)
     "record_rotation",
     "get_rotation_chain",
     "check_with_rotation",

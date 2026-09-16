@@ -117,6 +117,19 @@ CREATE TABLE IF NOT EXISTS group_memberships (
     revoke_reason     TEXT,
     PRIMARY KEY (group_id, device_id)
 );
+CREATE TABLE IF NOT EXISTS group_policies (
+    group_id                      TEXT PRIMARY KEY,
+    allow_external_trust          INTEGER NOT NULL DEFAULT 1,
+    allow_export                  INTEGER NOT NULL DEFAULT 1,
+    leave_requires_admin          INTEGER NOT NULL DEFAULT 0,
+    allow_inter_group             INTEGER NOT NULL DEFAULT 1,
+    communication_matrix          TEXT NOT NULL DEFAULT '[]',
+    default_communication_effect  TEXT NOT NULL DEFAULT 'allow',
+    version                       INTEGER NOT NULL DEFAULT 1,
+    updated_at                    REAL NOT NULL,
+    admin_device_id               TEXT,
+    signature                     TEXT
+);
 """
 
 

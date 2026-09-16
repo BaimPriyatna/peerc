@@ -15,11 +15,11 @@ Inspirasi UX:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ peerc                                          ● LAN Connected │
+│ peerc                                        ● LAN Connected │
 ├───────────────┬──────────────────────────────────────────────┤
 │ DEVICES       │ CHAT                                         │
 │               │                                              │
-│ ● Laptop      │ You                                           │
+│ ● Laptop      │ You                                          │
 │   Trusted     │ Hello!                                       │
 │               │                                              │
 │ ● Android     │ Android                                      │
@@ -94,7 +94,7 @@ Layout:
 
 ```
 ┌───────────────────────────────────────────────┐
-│ peerc                             ● Secure LAN │
+│ peerc                            ● Secure LAN │
 ├──────────────┬────────────────────────────────┤
 │ DEVICES      │ CHAT                           │
 │              │                                │
@@ -102,7 +102,7 @@ Layout:
 │ ● Android    │ Hello                          │
 │ ? Desktop    │                                │
 │              │ Android                        │
-│              │ 📎 photo.jpg                   │
+│              │  📎 photo.jpg                  │
 │              │                                │
 ├──────────────┴────────────────────────────────┤
 │ > Type a message...                           │
@@ -247,7 +247,7 @@ Saat device baru ditemukan:
 │ Android                                  │
 │                                          │
 │ Fingerprint                              │
-│ A82F 19C3 77B1 9D20                     │
+│ A82F 19C3 77B1 9D20                      │
 │                                          │
 │ This device is not trusted yet.          │
 │                                          │
@@ -274,11 +274,11 @@ rotation):
 ├──────────────────────────────────────────┤
 │ Android has changed its identity.        │
 │                                          │
-│ Previous                                │
-│ A82F 19C3 77B1                          │
+│ Previous                                 │
+│ A82F 19C3 77B1                           │
 │                                          │
-│ Current                                 │
-│ 71AC 44E1 9320                          │
+│ Current                                  │
+│ 71AC 44E1 9320                           │
 │                                          │
 │ This may mean:                           │
 │ • the device was reinstalled             │
@@ -566,9 +566,9 @@ Muncul:
 ├──────────────────────────────────────────┤
 │ Send file                                │
 │ Send clipboard                           │
-│ Open device                               │
-│ Revoke device                             │
-│ Settings                                  │
+│ Open device                              │
+│ Revoke device                            │
+│ Settings                                 │
 └──────────────────────────────────────────┘
 ```
 
@@ -1122,19 +1122,19 @@ PEERC
 
        ┌─────── Main ───────┐
        │                    │
-       │  Devices            │
-       │  ──────────────     │
-       │  ✓ Android          │
-       │  ✓ Laptop           │
-       │  ? Desktop          │
+       │  Devices           │
+       │  ──────────────    │
+       │  ✓ Android         │
+       │  ✓ Laptop          │
+       │  ? Desktop         │
        │                    │
-       │  Chat               │
-       │  ──────────────     │
-       │  Hello              │
-       │  📎 photo.jpg       │
+       │  Chat              │
+       │  ──────────────    │
+       │  Hello             │
+       │  📎 photo.jpg      │
        │                    │
-       │  Transfers          │
-       │  ███████░ 72%       │
+       │  Transfers         │
+       │  ███████░ 72%      │
        │                    │
        └────────────────────┘
 
@@ -1164,14 +1164,14 @@ Target:
 ```
 ┌─ DEVICES ───────────┐  ┌─ CHAT ─────────────────────────────────┐
 │ ● Laptop             │▲│ Baim                            14:32  │▲
-│   Trusted            │█│ Hello!                                  │ │
-│ ● Android            │█│                                         │ │
+│   Trusted            │█│ Hello!                                 │ │
+│ ● Android            │█│                                        │ │
 │   Trusted            │ │ Android                         14:33  │█│
-│ ? Desktop            │ │ Hi, ini filenya.                        │█│
-│   New device         │ │                                         │█│
-│                      │ │ 📎 photo.jpg                            │ │
+│ ? Desktop            │ │ Hi, ini filenya.                       │█│
+│   New device         │ │                                        │█│
+│                      │ │ 📎 photo.jpg                           │ │
 │                      │▼│ ✓ Received (12.4 MB)                   │▼│
-└──────────────────────┘  └─────────────────────────────────────────┘
+└──────────────────────┘ └─────────────────────────────────────────┘
 ```
 
 Aturan scrollbar:
@@ -1254,11 +1254,11 @@ dan file list masing-masing.
 
 ```
 ┌─ DEVICES (3) ──────┐  ┌─ [Chat] [File] — Android ─────────────┐
-│                      │  │                                        │
-│  content...          │  │  (tab Chat atau File ditampilkan       │
-│                      │  │   di area yang sama ini)               │
-│                      │  │                                        │
-└──────────────────────┘  └────────────────────────────────────────┘
+│                    │  │                                       │
+│  content...        │  │  (tab Chat atau File ditampilkan      │
+│                    │  │   di area yang sama ini)              │
+│                    │  │                                       │
+└────────────────────┘  └───────────────────────────────────────┘
 ```
 
 Aturan panel boxes:
@@ -1314,22 +1314,22 @@ def _switch_tab(self, tab: str) -> None:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ peerc — Baim (91c37a42)                           ● Secure │ 22:41 │
+│ peerc — Baim (91c37a42)                            ● Secure │ 22:41 │
 ├──── DEVICES (3) ─────┬──── [Chat] File — Android ───────────────────┤
-│                      │▲                                            │▲
-│ ► ● Android          │ │ Baim                             14:32   │ │
-│     192.168.1.20     │ │ Hello!                                    │ │
-│                      │ │                                           │█│
-│   ● Laptop           │█│ Android                          14:33   │█│
-│     192.168.1.10     │█│ Hi, ini filenya.                         │█│
-│                      │ │                                           │ │
-│   ? Desktop          │ │ You                              14:34   │ │
-│     New device       │ │ Ok, got it!                               │ │
-│                      │▼│                                           │▼│
+│                      │▲                                             │▲
+│ ► ● Android          │ │ Baim                             14:32     │ │
+│     192.168.1.20     │ │ Hello!                                     │ │
+│                      │ │                                            │█│
+│   ● Laptop           │█│ Android                          14:33     │█│
+│     192.168.1.10     │█│ Hi, ini filenya.                           │█│
+│                      │ │                                            │ │
+│   ? Desktop          │ │ You                              14:34     │ │
+│     New device       │ │ Ok, got it!                                │ │
+│                      │▼│                                            │▼│
 ├──────────────────────┴──────────────────────────────────────────────┤
-│ > Type a message...                                    Ctrl+F File │
+│ > Type a message...                                     Ctrl+F File │
 ├─────────────────────────────────────────────────────────────────────┤
-│ 3 devices • ✓ Secure • 1 transfer active                           │
+│ 3 devices • ✓ Secure • 1 transfer active                            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1337,22 +1337,22 @@ def _switch_tab(self, tab: str) -> None:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ peerc — Baim (91c37a42)                           ● Secure │ 22:41 │
+│ peerc — Baim (91c37a42)                            ● Secure │ 22:41 │
 ├──── DEVICES (3) ─────┬──── Chat [File] — Android ───────────────────┤
-│                      │▲                                            │▲
-│ ► ● Android          │ │ SHARED FILES                              │ │
-│     192.168.1.20     │ │                                           │ │
-│                      │ │ ↓ photo.jpg         12.4 MB  ✓ Received  │ │
-│   ● Laptop           │█│ ↓ document.pdf       2.1 MB  ✓ Received  │█│
-│     192.168.1.10     │█│ ↑ archive.zip        4.2 GB  ███░ 63%    │█│
-│                      │ │ ↓ notes.txt          48 KB   ✓ Received  │ │
-│   ? Desktop          │ │                                           │ │
-│     New device       │ │                                           │ │
-│                      │▼│                                           │▼│
+│                      │▲                                             │▲
+│ ► ● Android          │ │ SHARED FILES                               │ │
+│     192.168.1.20     │ │                                            │ │
+│                      │ │ ↓ photo.jpg         12.4 MB  ✓ Received   │ │
+│   ● Laptop           │█│ ↓ document.pdf       2.1 MB  ✓ Received   │█│
+│     192.168.1.10     │█│ ↑ archive.zip        4.2 GB  ███░ 63%     │█│
+│                      │ │ ↓ notes.txt          48 KB   ✓ Received   │ │
+│   ? Desktop          │ │                                            │ │
+│     New device       │ │                                            │ │
+│                      │▼│                                            │▼│
 ├──────────────────────┴──────────────────────────────────────────────┤
-│ /send <filepath>  or drag file here               Ctrl+C Chat     │
+│ /send <filepath>  or drag file here                 Ctrl+C Chat     │
 ├─────────────────────────────────────────────────────────────────────┤
-│ 3 devices • ✓ Secure • 1 transfer active                           │
+│ 3 devices • ✓ Secure • 1 transfer active                            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1360,20 +1360,20 @@ def _switch_tab(self, tab: str) -> None:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ peerc — Baim                                    ● Secure │ 22:41│
-├──── [Chat] File — Android ──────────────────────────────────────┤
-│                                                                 │▲
-│ Baim                                                   14:32   │ │
-│ Hello!                                                          │█│
-│                                                                 │█│
-│ Android                                                14:33   │ │
-│ Hi, ini filenya.                                                │ │
-│                                                                 │▼│
-├─────────────────────────────────────────────────────────────────┤
-│ > Type a message...                                             │
-├─────────────────────────────────────────────────────────────────┤
-│ 3 devices • ✓ Secure               Ctrl+D Devices  Ctrl+T Tab │
-└─────────────────────────────────────────────────────────────────┘
+│ peerc — Baim                                     ● Secure │ 22:41│
+├──── [Chat] File — Android ───────────────────────────────────────┤
+│                                                                  │▲
+│ Baim                                                   14:32     │ │
+│ Hello!                                                           │█│
+│                                                                  │█│
+│ Android                                                14:33     │ │
+│ Hi, ini filenya.                                                 │ │
+│                                                                  │▼│
+├──────────────────────────────────────────────────────────────────┤
+│ > Type a message...                                              │
+├──────────────────────────────────────────────────────────────────┤
+│ 3 devices • ✓ Secure                  Ctrl+D Devices  Ctrl+T Tab │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Wide view (160+ columns — three-column)
@@ -1691,11 +1691,11 @@ nunjukin badge mode penyimpanan (🔒 Secure / 📁 Normal — lihat
 │ ↑ archive.zip          4.2 GB   ███████░ 63%  ETA 00:31        │ │
 │                                                                │ │
 │ HISTORY                                                        │█│
-│ ↓ photo.jpg    🔒 Secure   12.4 MB   ✓ Received   14:33        │█│
-│ ↓ document.pdf 📁 Normal    2.1 MB   ✓ Received   Yesterday    │ │
+│ ↓ photo.jpg    🔒 Secure   12.4 MB   ✓ Received   14:33       │█│
+│ ↓ document.pdf 📁 Normal    2.1 MB   ✓ Received   Yesterday   │ │
 │                                                                │▼│
 ├────────────────────────────────────────────────────────────────┤
-│ /send <filepath>                               Ctrl+C → Chat  │
+│ /send <filepath>                                Ctrl+C → Chat  │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1724,17 +1724,17 @@ File ini):
 
 ```
 ┌─ 🔐 Authentication required ───────────────────┐
-│                                                  │
+│                                                 │
 │  laporan.pdf                                    │
 │  Action: Export                                 │
-│                                                  │
+│                                                 │
 │  Enter passphrase:                              │
 │  [••••••••••••••••]                             │
-│                                                  │
+│                                                 │
 │  ☐ Don't ask again this session (files only)   │
-│                                                  │
-│              [ Cancel ]        [ Continue ]      │
-└──────────────────────────────────────────────────┘
+│                                                 │
+│              [ Cancel ]        [ Continue ]     │
+└─────────────────────────────────────────────────┘
 ```
 
 - Kalau **Export** dan critical-action key udah di-set user (opsional,

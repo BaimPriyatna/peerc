@@ -13,12 +13,14 @@ silently persists something it can't cryptographically justify.
 
 import base64
 import enum
+import json
 import os
 import sqlite3
 import time
 from typing import List, Optional
 
 from .membership import Group, MembershipCertificate, verify_membership_certificate
+from .policy import CommunicationRule, GroupPolicy, PolicyEffect
 
 DEFAULT_DB_PATH = os.path.expanduser("~/.peerc/group.db")
 
@@ -45,6 +47,19 @@ CREATE TABLE IF NOT EXISTS group_memberships (
     revoked_at        REAL,
     revoke_reason     TEXT,
     PRIMARY KEY (group_id, device_id)
+);
+CREATE TABLE IF NOT EXISTS group_policies (
+    group_id                      TEXT PRIMARY KEY,
+    allow_external_trust          INTEGER NOT NULL DEFAULT 1,
+    allow_export                  INTEGER NOT NULL DEFAULT 1,
+    leave_requires_admin          INTEGER NOT NULL DEFAULT 0,
+    allow_inter_group             INTEGER NOT NULL DEFAULT 1,
+    communication_matrix          TEXT NOT NULL DEFAULT '[]',
+    default_communication_effect  TEXT NOT NULL DEFAULT 'allow',
+    version                       INTEGER NOT NULL DEFAULT 1,
+    updated_at                    REAL NOT NULL,
+    admin_device_id               TEXT,
+    signature                     TEXT
 );
 """
 
@@ -77,6 +92,24 @@ def _row_to_cert(row: sqlite3.Row) -> MembershipCertificate:
         permissions=row["permissions"].split(",") if row["permissions"] else [],
         issued_at=row["issued_at"],
         expires_at=row["expires_at"],
+        admin_device_id=row["admin_device_id"],
+        signature=row["signature"],
+    )
+
+
+def _row_to_policy(row: sqlite3.Row) -> GroupPolicy:
+    matrix_raw = json.loads(row["communication_matrix"]) if row["communication_matrix"] else []
+    rules = [CommunicationRule.from_dict(r) if isinstance(r, dict) else r for r in matrix_raw]
+    return GroupPolicy(
+        group_id=row["group_id"],
+        allow_external_trust=bool(row["allow_external_trust"]),
+        allow_export=bool(row["allow_export"]),
+        leave_requires_admin=bool(row["leave_requires_admin"]),
+        allow_inter_group=bool(row["allow_inter_group"]),
+        communication_matrix=rules,
+        default_communication_effect=PolicyEffect(row["default_communication_effect"]),
+        version=row["version"],
+        updated_at=row["updated_at"],
         admin_device_id=row["admin_device_id"],
         signature=row["signature"],
     )
@@ -233,3 +266,66 @@ class GroupStore:
             (MembershipStatus.REVOKED.value, revoked_by, time.time(), reason, group_id, device_id),
         )
         self._require_conn().commit()
+
+    # ---- policies -------------------------------------------------------
+
+    def set_policy(self, policy: GroupPolicy) -> GroupPolicy:
+        """Insert or update group policy.
+
+        Refuses if the group does not exist or if admin_device_id does not match.
+        """
+        group = self.get_group(policy.group_id)
+        if group is None:
+            raise GroupStoreError(f"cannot set policy for unknown group_id {policy.group_id!r}")
+        if policy.admin_device_id and policy.admin_device_id != group.admin_device_id:
+            raise GroupStoreError(
+                f"policy admin_device_id {policy.admin_device_id!r} does not match "
+                f"group {group.group_id!r}'s recorded admin {group.admin_device_id!r}"
+            )
+
+        matrix_json = json.dumps([r.to_dict() for r in policy.communication_matrix])
+        self._require_conn().execute(
+            "INSERT INTO group_policies "
+            "(group_id, allow_external_trust, allow_export, leave_requires_admin, allow_inter_group, "
+            " communication_matrix, default_communication_effect, version, updated_at, admin_device_id, signature) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(group_id) DO UPDATE SET "
+            "allow_external_trust=excluded.allow_external_trust, "
+            "allow_export=excluded.allow_export, "
+            "leave_requires_admin=excluded.leave_requires_admin, "
+            "allow_inter_group=excluded.allow_inter_group, "
+            "communication_matrix=excluded.communication_matrix, "
+            "default_communication_effect=excluded.default_communication_effect, "
+            "version=excluded.version, "
+            "updated_at=excluded.updated_at, "
+            "admin_device_id=excluded.admin_device_id, "
+            "signature=excluded.signature",
+            (
+                policy.group_id,
+                1 if policy.allow_external_trust else 0,
+                1 if policy.allow_export else 0,
+                1 if policy.leave_requires_admin else 0,
+                1 if policy.allow_inter_group else 0,
+                matrix_json,
+                policy.default_communication_effect.value,
+                policy.version,
+                policy.updated_at,
+                policy.admin_device_id,
+                policy.signature,
+            ),
+        )
+        self._require_conn().commit()
+        return policy
+
+    def get_policy(self, group_id: str) -> Optional[GroupPolicy]:
+        row = self._require_conn().execute(
+            "SELECT * FROM group_policies WHERE group_id = ?", (group_id,)
+        ).fetchone()
+        return _row_to_policy(row) if row else None
+
+    def list_policies(self) -> List[GroupPolicy]:
+        rows = self._require_conn().execute(
+            "SELECT * FROM group_policies ORDER BY updated_at DESC"
+        ).fetchall()
+        return [_row_to_policy(r) for r in rows]
+

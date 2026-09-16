@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "peerc"
-version = "1.16.0"
+version = "1.16.1"
 description = "Peer-to-peer terminal chat and file transfer application"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,7 +27,7 @@ pchat = "ui:main"
 
 [tool.setuptools]
 py-modules = ["chat", "discovery", "file_transfer", "peer", "protocol", "ui"]
-packages = ["core", "core.protocol", "core.identity", "core.trust", "core.crypto", "core.transport", "core.transfer", "core.security", "core.vault"]
+packages = ["core", "core.protocol", "core.identity", "core.trust", "core.crypto", "core.transport", "core.transfer", "core.security", "core.vault", "core.group"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
