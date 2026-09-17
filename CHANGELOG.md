@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.16.2] — Phase 3.4: identity display metadata (device model, first-run name setup)
+
+### Added
+- **`core/device_info.py`** [NEW]: `detect_device_model()` — best-effort human-readable OS/platform string (macOS version, Linux with WSL/Termux special-cased, Windows release, generic fallback). Deliberately never persisted anywhere (not `identity.json`, not the vault) — recomputed fresh every app start, so restoring/importing an identity onto different hardware never shows a stale device's model. See §37 "Self-Reported Display Metadata" in `docs/SECURITY_MODEL.md`.
+- **`core/identity/identity_file.py`**: `DeviceIdentity.is_new` — True only for the `load_or_create_identity()` call that generates a brand-new identity, letting `ui.py` show a first-run prompt exactly once.
+- **`ui.py`**: `NameSetupModal` — first-run only, lets a new user pick a display name before the app proceeds (defaults to `"peer"` if left blank, same as never running `/name` at all). `validate_display_name()` factors out the BUG-020 rules (no control characters/newlines, max 32 chars) so both the modal and the `/name` command share one validator. `self.device_model` shown in the startup log, `/info`, and next to each peer in `/peers`.
+- **`discovery.py`**: `model` threaded through both discovery transports (UDP broadcast + mDNS TXT records) the same way `name` already was — `Peer.model`, `PeerRegistry.upsert(model=...)` (never clears a previously-known model on an update announce with none), `_build_mdns_txt`/`_mdns_txt_to_packet` round-trip it (64-char cap, matching `name`). Legacy peers that don't send a `model` field are still accepted, same as before Phase 3.4.
+- 19 new/updated tests (`tests/test_device_info.py`, `tests/test_identity_file.py`, additions to `tests/test_discovery.py` and `tests/test_stage5.py`).
+
+### Changed
+- **`ui.py`**: `/nick` renamed to `/name` (clearer — this changes a display label, not a network handle). `/help` and the self-info panel updated to match.
+
 ## [1.16.1] — Group Authority System — policy schema & core-level enforcement
 
 ### Added

@@ -15,7 +15,7 @@ Commands typed into the input box:
     /peers                          list all discovered peers and status
     /msg <peer-name-or-id-prefix>   switch active chat target
     /send <filepath>                offer a file to the active peer
-    /nick <new-name>                change display name and re-announce
+    /name <new-name>                change display name and re-announce
     /copy [last|all]                copy chat to system clipboard
     /clear                          clear chat log
     /info or /me                    show local identity and network details
@@ -58,6 +58,7 @@ from core.events import (
 )
 import core.identity as identity
 import discovery
+from core.device_info import detect_device_model
 import file_transfer
 import protocol
 from core.trust.store import DEFAULT_DB_PATH as TRUST_DB_LEGACY_PATH
@@ -180,6 +181,56 @@ def copy_to_system_clipboard(text: str) -> None:
             return
         except Exception:
             pass
+
+
+def validate_display_name(name: str) -> tuple[bool, str]:
+    """Shared by NameSetupModal (first run) and the /name command
+    (BUG-020: no control characters/newlines, max 32 chars — nickname
+    used to be accepted verbatim and broadcast to every peer on the LAN
+    as-is)."""
+    if any(ord(c) < 0x20 or ord(c) == 0x7f for c in name):
+        return False, "Name cannot contain control characters or newlines."
+    if len(name) > 32:
+        return False, "Name too long (max 32 characters)."
+    return True, ""
+
+
+class NameSetupModal(ModalScreen[str]):
+    """First-run only: pick a display name before the app proceeds.
+
+    Not security-relevant (same as /name later) — just avoids everyone's
+    very first session silently showing up as "peer" to other peers.
+    Leaving it blank keeps the "peer" default, same as never running
+    /name at all. Validation mirrors the /name command's rules
+    (BUG-020: no control characters/newlines, max 32 chars).
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="vault-dialog"):
+            yield Label("👋 Welcome to peerc")
+            yield Label("What name should other peers see you as? (you can change this later with /name)")
+            yield Label("", id="name-error")
+            yield Input(placeholder="peer", id="display-name")
+            yield Button("Continue", id="continue-name", variant="success")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "continue-name":
+            self._submit()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._submit()
+
+    def _submit(self) -> None:
+        value = self.query_one("#display-name", Input).value.strip()
+        error_label = self.query_one("#name-error", Label)
+        if not value:
+            self.dismiss("")  # keep the "peer" default
+            return
+        ok, error = validate_display_name(value)
+        if not ok:
+            error_label.update(error)
+            return
+        self.dismiss(value)
 
 
 class VaultCreateModal(ModalScreen[str]):
@@ -443,6 +494,7 @@ class ChatApp(App):
         super().__init__()
         self.peer_id: str = ""
         self.display_name: str = ""
+        self.device_model: str = ""
         self.public_key_bytes: bytes = b""
         self.my_identity = None  # DeviceKeypair, set in on_mount (BUG-004)
         self.trust_store: Optional[TrustStore] = None
@@ -490,7 +542,15 @@ class ChatApp(App):
         self.display_name = dev_identity.name
         self.public_key_bytes = dev_identity.keypair.public_key_bytes()
         self.my_identity = dev_identity.keypair
-        self.title = f"peerc — {self.display_name} ({self.peer_id[:8]})"
+        self.device_model = detect_device_model()
+
+        if dev_identity.is_new:
+            chosen_name = await self._maybe_setup_name()
+            if chosen_name:
+                self.display_name = chosen_name
+                discovery.save_identity(self.peer_id, chosen_name)
+
+        self.title = f"peerc — {self.display_name} (id: {self.peer_id[:8]})"
 
         self.registry = discovery.PeerRegistry(
             on_peer_new=self._on_peer_new, on_peer_lost=self._on_peer_lost,
@@ -562,14 +622,14 @@ class ChatApp(App):
         await self.manager.start_server()
         self._discovery = discovery.Discovery(
             self.peer_id, self.display_name, UI_TCP_PORT, self.registry,
-            public_key=self.public_key_bytes,
+            public_key=self.public_key_bytes, model=self.device_model,
         )
         asyncio.create_task(self._discovery.run())
         asyncio.create_task(self._prune_ui_loop())
         asyncio.create_task(self._auto_lock_loop())
 
         log = self.query_one("#chat-log", SelectableRichLog)
-        log.write(f"[bold cyan]Started as {self.display_name} ({self.peer_id[:8]})[/bold cyan]")
+        log.write(f"[bold cyan]Started as {self.display_name} · {self.device_model} (id: {self.peer_id[:8]})[/bold cyan]")
         log.write("Waiting for peers... use [bold yellow]/help[/bold yellow] for commands.")
         timeout_m = self.vault_session.auto_lock_seconds / 60.0
         if self.vault_session.auto_lock_seconds == 0:
@@ -580,6 +640,13 @@ class ChatApp(App):
                 f"(sudo-style). /lock now, or /autolock to change.[/dim]"
             )
         log.write("[dim]Tip: Drag mouse over text to block/select. Press Ctrl+C or Ctrl+Shift+C to copy. Press Ctrl+Q to quit.[/dim]")
+
+    async def _maybe_setup_name(self) -> str:
+        """First-run only (dev_identity.is_new) — factored out on its own
+        so tests can bypass it the same way they bypass _unlock_vault
+        (a fresh isolated identity in a test is_new=True every run, and
+        this shows a modal that a headless pilot.pause() never answers)."""
+        return await self.push_screen_wait(NameSetupModal())
 
     async def _unlock_vault(self) -> bytes:
         """Phase 39.2: first-run vault creation, or unlock on every run
@@ -1301,7 +1368,7 @@ class ChatApp(App):
             self._log(" [bold cyan]/peers[/bold cyan]                List all discovered peers & status")
             self._log(" [bold cyan]/msg <name|id>[/bold cyan]        Switch active chat recipient")
             self._log(" [bold cyan]/send <filepath>[/bold cyan]      Offer a file to active peer")
-            self._log(" [bold cyan]/nick <new-name>[/bold cyan]      Change display name and re-announce")
+            self._log(" [bold cyan]/name <new-name>[/bold cyan]      Change display name and re-announce")
             self._log(" [bold cyan]/copy [all|last][/bold cyan]      Copy chat log or last message")
             self._log(" [bold cyan]/clear[/bold cyan]                Clear chat log screen")
             self._log(" [bold cyan]/info[/bold cyan] or [bold cyan]/me[/bold cyan]           Show self identity & network details")
@@ -1388,7 +1455,8 @@ class ChatApp(App):
                 self._log("[bold yellow]Discovered peers:[/bold yellow]")
                 for p in peers:
                     active = " [bold cyan](ACTIVE)[/bold cyan]" if p.peer_id == self.active_peer_id else ""
-                    self._log(f"  • [bold]{p.name}[/bold] ({p.peer_id[:8]}) at {p.ip}:{p.tcp_port}{active}")
+                    device = f" · {rich_escape(p.model)}" if p.model else ""
+                    self._log(f"  • [bold]{p.name}[/bold]{device} (id: {p.peer_id[:8]}) at {p.ip}:{p.tcp_port}{active}")
 
         elif cmd == "/msg":
             if not arg:
@@ -1423,28 +1491,23 @@ class ChatApp(App):
                 return
             self._log(f"[cyan]Offered {os.path.basename(arg)} ({transfer_id[:8]})[/cyan]")
 
-        elif cmd == "/nick":
+        elif cmd == "/name":
             if not arg:
-                self._log(f"[yellow]Current nickname: {rich_escape(self.display_name)}. Usage: /nick <new_name>[/yellow]")
+                self._log(f"[yellow]Current name: {rich_escape(self.display_name)}. Usage: /name <new_name>[/yellow]")
                 return
 
-            # BUG-020: nickname was previously accepted verbatim — no length
-            # cap, no control-character/newline check — before being stored
-            # and broadcast to every peer on the LAN.
-            if any(ord(c) < 0x20 or ord(c) == 0x7f for c in arg):
-                self._log("[red]Nickname cannot contain control characters or newlines.[/red]")
-                return
-            if len(arg) > 32:
-                self._log("[red]Nickname too long (max 32 characters).[/red]")
+            ok, error = validate_display_name(arg)
+            if not ok:
+                self._log(f"[red]{error}[/red]")
                 return
 
             old_name = self.display_name
             self.display_name = arg
-            self.title = f"peerc — {self.display_name} ({self.peer_id[:8]})"
+            self.title = f"peerc — {self.display_name} (id: {self.peer_id[:8]})"
             self._discovery.name = arg
             discovery.save_identity(self.peer_id, arg)
             self._discovery.broadcast_now()
-            self._log(f"[green]Nickname changed from '{rich_escape(old_name)}' to '{rich_escape(arg)}'[/green]")
+            self._log(f"[green]Name changed from '{rich_escape(old_name)}' to '{rich_escape(arg)}'[/green]")
 
         elif cmd == "/copy":
             log_widget = self.query_one("#chat-log", SelectableRichLog)
@@ -1480,6 +1543,7 @@ class ChatApp(App):
             targets_str = ", ".join(net.get("targets", []))
             self._log("[bold yellow]╔════════════════════ Self Info ════════════════════╗[/bold yellow]")
             self._log(f"  [bold]Name:[/bold]       {self.display_name}")
+            self._log(f"  [bold]Device:[/bold]     {self.device_model}")
             self._log(f"  [bold]Peer ID:[/bold]    {self.peer_id}")
             self._log(f"  [bold]TCP Port:[/bold]   {UI_TCP_PORT}")
             self._log(f"  [bold]UDP Port:[/bold]   {discovery.BROADCAST_PORT}")

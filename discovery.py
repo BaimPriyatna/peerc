@@ -88,6 +88,7 @@ class Peer:
     ip: str
     tcp_port: int
     public_key: bytes = b""  # raw Ed25519 public key bytes (Phase 5.1); empty for legacy/unset
+    model: str = ""  # self-reported device/platform string (core/device_info.py); "" for legacy/unset, display-only
     last_seen: float = field(default_factory=time.time)
 
 
@@ -105,11 +106,11 @@ class PeerRegistry:
         self._on_peer_lost = on_peer_lost
 
     def upsert(self, peer_id: str, name: str, ip: str, tcp_port: int,
-               public_key: bytes = b"") -> None:
+               public_key: bytes = b"", model: str = "") -> None:
         existing = self._peers.get(peer_id)
         now = time.time()
         if existing is None:
-            self._peers[peer_id] = Peer(peer_id, name, ip, tcp_port, public_key, now)
+            self._peers[peer_id] = Peer(peer_id, name, ip, tcp_port, public_key, model, now)
             if self._on_peer_new:
                 self._on_peer_new(self._peers[peer_id])
         else:
@@ -119,6 +120,8 @@ class PeerRegistry:
             existing.tcp_port = tcp_port
             if public_key:
                 existing.public_key = public_key
+            if model:
+                existing.model = model
             existing.last_seen = now
 
     def prune_stale(self) -> None:
@@ -267,7 +270,7 @@ def load_or_create_identity(config_path: str = identity.DEFAULT_IDENTITY_FILE) -
 # ---------------------------------------------------------------------------
 
 def _build_mdns_txt(version: int, device_id: str, public_key: bytes,
-                    name: str, tcp_port: int) -> dict[str, str]:
+                    name: str, tcp_port: int, model: str = "") -> dict[str, str]:
     """Build the TXT record key-value dict for a peerc mDNS service.
 
     All values are str (zeroconf encodes them as UTF-8 in the TXT record).
@@ -280,6 +283,7 @@ def _build_mdns_txt(version: int, device_id: str, public_key: bytes,
         "public_key": base64.b64encode(public_key).decode("ascii"),
         "name": name[:64],
         "tcp_port": str(tcp_port),
+        "model": model[:64],
     }
 
 
@@ -311,6 +315,7 @@ def _mdns_txt_to_packet(txt: dict, src_ip: str) -> bytes:
         "public_key": txt.get("public_key", ""),
         "name": txt.get("name", src_ip),
         "tcp_port": _safe_int(txt.get("tcp_port", "0")),
+        "model": txt.get("model", ""),
         "reply": False,
     }
     return json.dumps(msg).encode("utf-8")
@@ -376,11 +381,13 @@ class MDNSDiscovery:
 
     def __init__(self, peer_id: str, name: str, tcp_port: int,
                  public_key: bytes,
-                 on_packet: Callable[[bytes, tuple[str, int]], None]) -> None:
+                 on_packet: Callable[[bytes, tuple[str, int]], None],
+                 model: str = "") -> None:
         self._peer_id = peer_id
         self._name = name
         self._tcp_port = tcp_port
         self._public_key = public_key
+        self._model = model
         self._on_packet = on_packet  # == Discovery._handle_packet
         # Service name must be unique per device; use first 16 hex chars of device_id.
         self._service_name = f"{peer_id[:16]}.{MDNS_SERVICE_TYPE}"
@@ -389,7 +396,7 @@ class MDNSDiscovery:
         from zeroconf import ServiceInfo as _SI
         txt = _build_mdns_txt(
             PROTOCOL_VERSION, self._peer_id, self._public_key,
-            self._name, self._tcp_port,
+            self._name, self._tcp_port, self._model,
         )
         # Advertise all non-loopback local IPv4 addresses
         local_ips: list[bytes] = []
@@ -461,12 +468,13 @@ class Discovery:
     """
 
     def __init__(self, peer_id: str, name: str, tcp_port: int, registry: PeerRegistry,
-                 public_key: bytes = b""):
+                 public_key: bytes = b"", model: str = ""):
         self.peer_id = peer_id
         self.name = name
         self.tcp_port = tcp_port
         self.registry = registry
         self.public_key = public_key
+        self.model = model
         self._sock: Optional[socket.socket] = None
         self._send_sock: Optional[socket.socket] = None
 
@@ -493,6 +501,7 @@ class Discovery:
             "public_key": base64.b64encode(self.public_key).decode("ascii"),
             "name": self.name,
             "tcp_port": self.tcp_port,
+            "model": self.model,
             "reply": reply,
         }).encode("utf-8")
 
@@ -614,13 +623,18 @@ class Discovery:
             name = addr[0]
         name = name[:64]  # don't let discovery become an amplified nickname-length bug
 
+        model = msg.get("model", "")
+        if not isinstance(model, str):
+            model = ""
+        model = model[:64]
+
         tcp_port = msg.get("tcp_port", 0)
         if not isinstance(tcp_port, int) or not (0 < tcp_port < 65536):
             return
 
         ip = addr[0]
         self.registry.upsert(peer_id=device_id, name=name, ip=ip, tcp_port=tcp_port,
-                              public_key=public_key_bytes)
+                              public_key=public_key_bytes, model=model)
 
         # Bi-directional discovery reply:
         # If the incoming announce permits replies, immediately send a unicast announce back.
@@ -652,6 +666,7 @@ class Discovery:
             tcp_port=self.tcp_port,
             public_key=self.public_key,
             on_packet=self._handle_packet,
+            model=self.model,
         )
         try:
             await mdns.run()

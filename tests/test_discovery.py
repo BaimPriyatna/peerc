@@ -383,3 +383,123 @@ async def test_discovery_run_includes_mdns_task_only_when_available():
 
     # Without mDNS: 3 tasks (announce, listen, prune)
     assert len(gathered_tasks) == 3
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.4: self-reported device "model" string — display-only, threaded
+# through both discovery transports the same way "name" already is.
+# ---------------------------------------------------------------------------
+
+def test_build_payload_includes_model():
+    keypair = generate_keypair()
+    registry = PeerRegistry()
+    disc = Discovery(
+        peer_id=keypair.device_id, name="tester", tcp_port=5656, registry=registry,
+        public_key=keypair.public_key_bytes(), model="Linux (x86_64)",
+    )
+    payload = json.loads(disc._build_payload(reply=False))
+    assert payload["model"] == "Linux (x86_64)"
+
+
+def test_build_payload_model_defaults_to_empty_string():
+    disc, _ = _make_discovery()  # no model= passed
+    payload = json.loads(disc._build_payload(reply=False))
+    assert payload["model"] == ""
+
+
+def test_handle_packet_stores_model_on_registry():
+    registry = PeerRegistry()
+    keypair = generate_keypair()
+    disc = Discovery(peer_id="self-id", name="self", tcp_port=5656, registry=registry)
+    packet = _valid_packet(keypair.device_id, keypair.public_key_bytes(), model="Pixel 7")
+
+    disc._handle_packet(packet, ("10.0.0.5", BROADCAST_PORT))
+
+    peer = registry.get(keypair.device_id)
+    assert peer is not None
+    assert peer.model == "Pixel 7"
+
+
+def test_handle_packet_missing_model_defaults_to_empty_string():
+    """Legacy peers (pre-Phase-3.4) that never send a model field must
+    still be accepted — model just stays empty, same as name/public_key
+    handled legacy peers before."""
+    registry = PeerRegistry()
+    keypair = generate_keypair()
+    disc = Discovery(peer_id="self-id", name="self", tcp_port=5656, registry=registry)
+    msg = {
+        "type": "announce",
+        "version": PROTOCOL_VERSION,
+        "device_id": keypair.device_id,
+        "public_key": base64.b64encode(keypair.public_key_bytes()).decode("ascii"),
+        "name": "legacy-peer",
+        "tcp_port": 6000,
+        "reply": False,
+        # no "model" key at all
+    }
+    packet = json.dumps(msg).encode("utf-8")
+
+    disc._handle_packet(packet, ("10.0.0.6", BROADCAST_PORT))
+
+    peer = registry.get(keypair.device_id)
+    assert peer is not None
+    assert peer.model == ""
+
+
+def test_handle_packet_non_string_model_dropped_to_empty_string():
+    """A malformed/spoofed model field (wrong type) must not crash
+    validation — same defensive handling as tcp_port/name."""
+    registry = PeerRegistry()
+    keypair = generate_keypair()
+    disc = Discovery(peer_id="self-id", name="self", tcp_port=5656, registry=registry)
+    packet = _valid_packet(keypair.device_id, keypair.public_key_bytes(), model=12345)
+
+    disc._handle_packet(packet, ("10.0.0.7", BROADCAST_PORT))
+
+    peer = registry.get(keypair.device_id)
+    assert peer is not None
+    assert peer.model == ""
+
+
+def test_peer_registry_upsert_updates_model_without_clearing_it():
+    """Same rule public_key already follows: an update announce with no
+    (or empty) model must not blank out a previously-known one."""
+    registry = PeerRegistry()
+    registry.upsert("dev-1", "Alice", "10.0.0.1", 5656, model="MacBook Air M2")
+    assert registry.get("dev-1").model == "MacBook Air M2"
+
+    registry.upsert("dev-1", "Alice", "10.0.0.1", 5656)  # no model= this time
+    assert registry.get("dev-1").model == "MacBook Air M2"
+
+    registry.upsert("dev-1", "Alice", "10.0.0.1", 5656, model="MacBook Pro M3")
+    assert registry.get("dev-1").model == "MacBook Pro M3"
+
+
+def test_build_mdns_txt_includes_model():
+    keypair = generate_keypair()
+    txt = _build_mdns_txt(
+        version=PROTOCOL_VERSION, device_id=keypair.device_id,
+        public_key=keypair.public_key_bytes(), name="test-device", tcp_port=5656,
+        model="WSL Linux (x86_64)",
+    )
+    assert txt["model"] == "WSL Linux (x86_64)"
+    assert isinstance(txt["model"], str)
+
+
+def test_build_mdns_txt_model_capped_at_64():
+    keypair = generate_keypair()
+    long_model = "M" * 100
+    txt = _build_mdns_txt(PROTOCOL_VERSION, keypair.device_id,
+                          keypair.public_key_bytes(), "name", 5656, model=long_model)
+    assert len(txt["model"]) == 64
+
+
+def test_mdns_txt_to_packet_roundtrips_model():
+    keypair = generate_keypair()
+    txt = _build_mdns_txt(
+        version=PROTOCOL_VERSION, device_id=keypair.device_id,
+        public_key=keypair.public_key_bytes(), name="test-device", tcp_port=5656,
+        model="Android (Termux)",
+    )
+    packet = json.loads(_mdns_txt_to_packet(txt, "10.0.0.9"))
+    assert packet["model"] == "Android (Termux)"

@@ -720,3 +720,31 @@ inherently grant access to E2E encrypted content.»
 «A key compromise is treated as a security event requiring revocation
 and re-enrollment, not as something cryptography can magically recover
 from.»
+
+---
+
+## 37. Self-Reported Display Metadata (Name, Device Model)
+
+`name` (display name, Phase 3.3) and `model` (device/platform string,
+Phase 3.4, `core/device_info.py`) are shown next to a peer's identity
+in the UI — but neither is ever an input to a trust or security
+decision. The only thing that identifies a device is its Ed25519
+`device_id` (§5). A device is free to announce any `name`/`model` it
+wants; peerc never treats agreement or disagreement between them and
+anything else as evidence of anything.
+
+Their purpose is narrower and purely human: helping a person doing
+*manual* verification (deciding whether to trust a newly-seen device,
+§7 New Device UX in `DESIGN.md`) cross-check "is this really my
+friend's phone" against what they already know, alongside the
+cryptographic fingerprint — never a replacement for it.
+
+`model` is deliberately **not persisted** anywhere (not in
+`identity.json`, not in the vault). It's recomputed fresh from
+`platform`/environment detection every time the app starts. Persisting
+it once at identity creation would mean restoring or importing that
+identity onto different physical hardware keeps showing the *original*
+device's model forever — actively misleading for exactly the manual
+cross-check this field exists for. `name`, by contrast, is intentionally
+persisted (`identity.json`) and user-settable (`/name`, or the
+first-run `NameSetupModal`) — it's a chosen label, not a hardware fact.

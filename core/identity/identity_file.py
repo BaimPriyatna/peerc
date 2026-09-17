@@ -43,6 +43,9 @@ class DeviceIdentity:
     name: str
     created_at: float
     storage_backend: str  # "keyring" or "plaintext-file" — worth surfacing to the user
+    is_new: bool = False  # True only for the load_or_create_identity() call that
+    # generated this identity for the very first time — lets callers (ui.py) show
+    # a first-run "set your name" prompt exactly once, never on subsequent loads.
 
     @property
     def device_id(self) -> str:
@@ -92,6 +95,7 @@ def _load_existing(identity_file: str, key_store: KeyStore) -> DeviceIdentity:
         name=meta.get("name") or "peer",
         created_at=meta.get("created_at", time.time()),
         storage_backend=key_store.backend_name,
+        is_new=False,
     )
 
 
@@ -115,7 +119,7 @@ def _create_new(name: str, identity_file: str, key_store: KeyStore) -> DeviceIde
     with open(identity_file, "w") as f:
         json.dump(meta, f, indent=2)
 
-    return DeviceIdentity(keypair=keypair, name=name, created_at=created_at, storage_backend=backend_used)
+    return DeviceIdentity(keypair=keypair, name=name, created_at=created_at, storage_backend=backend_used, is_new=True)
 
 
 def rotate_identity(

@@ -9,7 +9,10 @@ discovery/chat/file_transfer sessions, and responds to input.
 Note: the vault-unlock flow (Phase 39.2+) is deliberately bypassed below
 rather than driven through its modal — that interactive flow has its own
 dedicated tests elsewhere; this file only needs a DEK in hand so _setup()
-can get past it and wire up the rest of the app.
+can get past it and wire up the rest of the app. Same reasoning applies
+to the first-run NameSetupModal (Phase 3.4): _isolated_load always
+creates a brand-new identity in an empty temp dir, so is_new is True on
+every run, and pilot.pause(0.5) never answers that modal either.
 """
 
 import asyncio
@@ -35,6 +38,7 @@ async def main() -> None:
     saved_load_identity = identity.load_or_create_identity
     saved_disc_load = discovery.load_or_create_identity
     saved_unlock_vault = ChatApp._unlock_vault
+    saved_setup_name = ChatApp._maybe_setup_name
     saved_db_unlock = VaultDatabase.unlock.__func__
 
     def _isolated_load(name="peer", identity_file=tmp_id, key_store=None):
@@ -50,6 +54,11 @@ async def main() -> None:
         # for interactive passphrase input) — just hand back a fresh DEK.
         return new_dek()
 
+    async def _isolated_setup_name(self):
+        # Skip NameSetupModal — keep the "peer" default, same as a real
+        # user just not answering it.
+        return ""
+
     def _isolated_db_unlock(cls, dek, vault_db_path=tmp_vault_db, force_fallback=False):
         # Same idea: keep this off the real ~/.peerc/vault.db.
         return saved_db_unlock(cls, dek, vault_db_path=vault_db_path, force_fallback=force_fallback)
@@ -57,6 +66,7 @@ async def main() -> None:
     identity.load_or_create_identity = _isolated_load
     discovery.load_or_create_identity = _isolated_disc_load
     ChatApp._unlock_vault = _isolated_unlock_vault
+    ChatApp._maybe_setup_name = _isolated_setup_name
     VaultDatabase.unlock = classmethod(_isolated_db_unlock)
 
     try:
@@ -69,6 +79,7 @@ async def main() -> None:
             assert app.manager is not None, "ConnectionManager should be created"
             assert app.chat_session is not None, "ChatSession should be created"
             assert app.file_session is not None, "FileTransferSession should be created"
+            assert app.device_model, "device_model should be auto-detected"
 
             # Type a command and submit it
             await pilot.click("#input-box")
@@ -88,6 +99,7 @@ async def main() -> None:
         identity.load_or_create_identity = saved_load_identity
         discovery.load_or_create_identity = saved_disc_load
         ChatApp._unlock_vault = saved_unlock_vault
+        ChatApp._maybe_setup_name = saved_setup_name
         VaultDatabase.unlock = classmethod(saved_db_unlock)
         shutil.rmtree(tmpdir, ignore_errors=True)
 
