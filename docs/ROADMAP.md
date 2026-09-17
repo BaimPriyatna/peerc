@@ -80,15 +80,13 @@ numeric phase order in the plan doc:
 1. **Phase 42 — Group Authority System** (in progress: 42.1 `membership.py`+storage landed as `1.16.0`; 42.2 `policy.py`+enforcement landed as `1.16.1`; `admin.py`/`audit.py` still to come) ← next
 2. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
 3. **Phase 44 — Internet P2P Connectivity** (design-complete)
-3. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
-4. **Phase 44 — Internet P2P Connectivity** (design-complete)
-5. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
-6. Phase 36/37 — UI/security UX
-8. Phase 28-35 — logging, performance, concurrency, state machines,
+4. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
+5. Phase 36/37 — UI/security UX
+6. Phase 28-35 — logging, performance, concurrency, state machines,
    error protocol
-9. Phase 38 — Project structure final (**not done now, deliberately** —
+7. Phase 38 — Project structure final (**not done now, deliberately** —
    see note below)
-10. Security audit, release
+8. Security audit, release
 
 ## Why Phase 38 (final project structure) isn't done yet
 
