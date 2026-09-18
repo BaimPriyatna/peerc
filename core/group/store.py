@@ -18,9 +18,12 @@ import json
 import os
 import sqlite3
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
+import uuid
+from core.security.events import SecurityEvent, SecurityEventType, SecuritySeverity, emit
 from .admin import AdminRecord
+from .audit import create_group_audit_event, verify_group_audit_event
 from .membership import Group, MembershipCertificate, verify_membership_certificate
 from .policy import CommunicationRule, GroupPolicy, LeaveRequiresAdminError, PolicyEffect
 from .protocol import (
@@ -84,6 +87,18 @@ CREATE TABLE IF NOT EXISTS group_admins (
     removed_by  TEXT,
     PRIMARY KEY (group_id, device_id)
 );
+CREATE TABLE IF NOT EXISTS group_audit_log (
+    event_id         TEXT PRIMARY KEY,
+    group_id         TEXT NOT NULL,
+    event_type       TEXT NOT NULL,
+    severity         TEXT NOT NULL,
+    description      TEXT NOT NULL,
+    device_id        TEXT,
+    timestamp        REAL NOT NULL,
+    details          TEXT NOT NULL,
+    signature        TEXT,
+    signer_device_id TEXT
+);
 """
 
 
@@ -132,6 +147,20 @@ def _row_to_cert(row: sqlite3.Row) -> MembershipCertificate:
         admin_device_id=row["admin_device_id"],
         signature=row["signature"],
         status=row["status"] if "status" in row.keys() else "active",
+    )
+
+
+def _row_to_audit_event(row: sqlite3.Row) -> SecurityEvent:
+    details_raw = json.loads(row["details"]) if row["details"] else {}
+    return SecurityEvent(
+        event_type=row["event_type"],
+        severity=SecuritySeverity(row["severity"]),
+        description=row["description"],
+        device_id=row["device_id"],
+        timestamp=row["timestamp"],
+        details=details_raw,
+        signature=row["signature"],
+        signer_device_id=row["signer_device_id"],
     )
 
 
@@ -249,6 +278,17 @@ class GroupStore:
             ),
         )
         self._require_conn().commit()
+        self.record_audit_event(
+            group.group_id,
+            create_group_audit_event(
+                group_id=group.group_id,
+                event_type=SecurityEventType.GROUP_CREATED,
+                description=f"Group '{group.name}' created by founder",
+                severity=SecuritySeverity.INFO,
+                actor_device_id=group.admin_device_id,
+                details={"name": group.name, "admin_device_id": group.admin_device_id},
+            ),
+        )
         return group
 
     def get_group(self, group_id: str) -> Optional[Group]:
@@ -313,6 +353,18 @@ class GroupStore:
             ),
         )
         self._require_conn().commit()
+        self.record_audit_event(
+            cert.group_id,
+            create_group_audit_event(
+                group_id=cert.group_id,
+                event_type=SecurityEventType.MEMBERSHIP_ISSUED,
+                description=f"Membership recorded for device {cert.device_id[:8]} (role={cert.role})",
+                severity=SecuritySeverity.INFO,
+                device_id=cert.device_id,
+                actor_device_id=cert.admin_device_id,
+                details={"role": cert.role, "permissions": cert.permissions},
+            ),
+        )
         return cert
 
     def get_membership(self, group_id: str, device_id: str) -> Optional[MembershipCertificate]:
@@ -471,6 +523,18 @@ class GroupStore:
             (MembershipStatus.REVOKED.value, revoked_by, revoked_at or time.time(), reason, group_id, device_id),
         )
         self._require_conn().commit()
+        self.record_audit_event(
+            group_id,
+            create_group_audit_event(
+                group_id=group_id,
+                event_type=SecurityEventType.MEMBERSHIP_REVOKED,
+                description=f"Membership revoked for device {device_id[:8]}",
+                severity=SecuritySeverity.WARNING,
+                device_id=device_id,
+                actor_device_id=revoked_by,
+                details={"reason": reason or "", "revoked_by": revoked_by},
+            ),
+        )
 
     # ---- policies -------------------------------------------------------
 
@@ -523,6 +587,22 @@ class GroupStore:
             ),
         )
         self._require_conn().commit()
+        self.record_audit_event(
+            policy.group_id,
+            create_group_audit_event(
+                group_id=policy.group_id,
+                event_type=SecurityEventType.POLICY_CHANGED,
+                description=f"Policy version {policy.version} updated for group {policy.group_id}",
+                severity=SecuritySeverity.INFO,
+                actor_device_id=policy.admin_device_id,
+                details={
+                    "version": policy.version,
+                    "allow_external_trust": policy.allow_external_trust,
+                    "allow_export": policy.allow_export,
+                    "leave_requires_admin": policy.leave_requires_admin,
+                },
+            ),
+        )
         return policy
 
     def get_policy(self, group_id: str) -> Optional[GroupPolicy]:
@@ -576,6 +656,17 @@ class GroupStore:
             (record.group_id, record.device_id, record.public_key, record.added_at, record.added_by, AdminStatus.ACTIVE.value),
         )
         self._require_conn().commit()
+        self.record_audit_event(
+            group_id,
+            create_group_audit_event(
+                group_id=group_id,
+                event_type=SecurityEventType.ADMIN_ADDED,
+                description=f"Admin {device_id[:8]} added to group {group_id}",
+                severity=SecuritySeverity.INFO,
+                device_id=device_id,
+                actor_device_id=added_by,
+            ),
+        )
         return record
 
     def remove_admin(self, group_id: str, device_id: str, removed_by: str, reason: Optional[str] = None) -> None:
@@ -599,6 +690,18 @@ class GroupStore:
             (AdminStatus.REMOVED.value, removed_by, time.time(), group_id, device_id),
         )
         self._require_conn().commit()
+        self.record_audit_event(
+            group_id,
+            create_group_audit_event(
+                group_id=group_id,
+                event_type=SecurityEventType.ADMIN_REMOVED,
+                description=f"Admin {device_id[:8]} removed from group {group_id}",
+                severity=SecuritySeverity.WARNING,
+                device_id=device_id,
+                actor_device_id=removed_by,
+                details={"reason": reason or "", "removed_by": removed_by},
+            ),
+        )
 
     def get_admin(self, group_id: str, device_id: str) -> Optional[AdminRecord]:
         row = self._require_conn().execute(
@@ -638,3 +741,89 @@ class GroupStore:
             for a in self.list_admins(group_id, status=AdminStatus.ACTIVE)
         }
 
+    def record_audit_event(
+        self,
+        group_id: str,
+        event: SecurityEvent,
+        verify_with_admins: bool = False,
+    ) -> SecurityEvent:
+        """Record a SecurityEvent into group_audit_log.
+
+        If *verify_with_admins* is True and *event* is signed, verifies that
+        the signer is currently an active admin of *group_id*.
+        """
+        if not group_id:
+            raise GroupStoreError("group_id is required to record an audit event")
+        if self.get_group(group_id) is None:
+            raise GroupStoreError(f"cannot record audit event for unknown group_id {group_id!r}")
+
+        if verify_with_admins and event.signature:
+            active_admins = self.get_active_admin_public_keys(group_id)
+            if not verify_group_audit_event(event, active_admins):
+                raise GroupStoreError(
+                    f"audit event signature unverifiable against active admins of group {group_id!r}"
+                )
+
+        event_id = event.details.get("event_id") if isinstance(event.details, dict) else None
+        if not event_id:
+            event_id = str(uuid.uuid4())
+
+        details_json = json.dumps(event.details or {}, sort_keys=True)
+        self._require_conn().execute(
+            "INSERT INTO group_audit_log "
+            "(event_id, group_id, event_type, severity, description, device_id, timestamp, details, signature, signer_device_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                event_id,
+                group_id,
+                event.event_type,
+                event.severity.value,
+                event.description,
+                event.device_id,
+                event.timestamp,
+                details_json,
+                event.signature,
+                event.signer_device_id,
+            ),
+        )
+        self._require_conn().commit()
+        emit(event)
+        return event
+
+    def list_audit_events(
+        self,
+        group_id: str,
+        limit: Optional[int] = None,
+        event_type: Optional[str] = None,
+        severity: Optional[SecuritySeverity] = None,
+        since: Optional[float] = None,
+    ) -> List[SecurityEvent]:
+        """Query audit log entries for *group_id* in chronological order."""
+        query = "SELECT * FROM group_audit_log WHERE group_id = ?"
+        params: List[Any] = [group_id]
+
+        if event_type:
+            query += " AND event_type = ?"
+            params.append(event_type)
+        if severity:
+            query += " AND severity = ?"
+            params.append(severity.value if isinstance(severity, SecuritySeverity) else severity)
+        if since is not None:
+            query += " AND timestamp >= ?"
+            params.append(since)
+
+        query += " ORDER BY timestamp ASC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        rows = self._require_conn().execute(query, tuple(params)).fetchall()
+        return [_row_to_audit_event(r) for r in rows]
+
+    def get_audit_event(self, event_id: str) -> Optional[SecurityEvent]:
+        """Fetch one audit event by event_id."""
+        row = self._require_conn().execute(
+            "SELECT * FROM group_audit_log WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        return _row_to_audit_event(row) if row else None

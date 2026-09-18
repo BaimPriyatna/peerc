@@ -52,6 +52,7 @@ from textual.strip import Strip
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, RichLog
 
 import chat
+from core.security.events import SecuritySeverity
 from core.events import (
     EventBus,
     NetworkMessageReceived,
@@ -75,6 +76,7 @@ from core.group import (
     MembershipStatus,
     create_group,
     issue_membership_certificate,
+    verify_group_audit_event,
 )
 from core.group.protocol import (
     GroupJoinRequest,
@@ -1127,6 +1129,8 @@ class ChatApp(App):
             await self._handle_group_add_admin(rest, extra)
         elif subcmd == "policy":
             await self._handle_group_policy(rest, extra)
+        elif subcmd == "audit":
+            await self._handle_group_audit(rest, extra)
         else:
             self._log(f"[yellow]Unknown group subcommand: '{subcmd}'. Type /help for usage.[/yellow]")
 
@@ -1144,6 +1148,52 @@ class ChatApp(App):
             self._log(f"  • [bold]{g.name}[/bold] (id: [cyan]{g.group_id}[/cyan]) — {role_str}{status_str}")
         self._log("[bold yellow]╚═══════════════════════════════════════════════════╝[/bold yellow]")
         self._log("[dim]Use /group info <id>, /group members <id>, or /group admins <id>[/dim]")
+
+    async def _handle_group_audit(self, group_id: str, extra: str = "") -> None:
+        if not group_id:
+            groups = self.group_store.list_groups()
+            if len(groups) == 1:
+                group_id = groups[0].group_id
+            else:
+                self._log("[yellow]Usage: /group audit <group_id> [limit][/yellow]")
+                return
+
+        group = self.group_store.get_group(group_id)
+        if group is None:
+            self._log(f"[red]Group '{group_id}' not found.[/red]")
+            return
+
+        try:
+            limit = int(extra) if extra.strip().isdigit() else 20
+        except Exception:
+            limit = 20
+
+        active_admins = self.group_store.get_active_admin_public_keys(group_id)
+        events = self.group_store.list_audit_events(group_id, limit=limit)
+
+        self._log(f"[bold yellow]╔════════════ Group Audit Log: {group.name} ({len(events)}) ════════════╗[/bold yellow]")
+        if not events:
+            self._log("  [dim]No audit events recorded yet.[/dim]")
+        for ev in events:
+            t_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ev.timestamp))
+            if ev.signature:
+                if verify_group_audit_event(ev, active_admins):
+                    ver_badge = "[green]✓ signed[/green]"
+                else:
+                    ver_badge = "[red]✗ invalid-sig[/red]"
+            else:
+                ver_badge = "[dim]unsigned[/dim]"
+
+            sev_color = (
+                "green" if ev.severity == SecuritySeverity.INFO
+                else ("yellow" if ev.severity == SecuritySeverity.WARNING else "red")
+            )
+            actor = f" by {ev.signer_device_id[:8]}" if ev.signer_device_id else ""
+            self._log(
+                f"  [{sev_color}][{ev.severity.value}][/{sev_color}] [dim]{t_str}[/dim] "
+                f"[bold]{ev.event_type}[/bold]: {ev.description}{actor} ({ver_badge})"
+            )
+        self._log("[bold yellow]╚══════════════════════════════════════════════════════════╝[/bold yellow]")
 
     async def _handle_group_create(self, name: str, group_id: Optional[str] = None) -> None:
         if not name:
@@ -2279,6 +2329,7 @@ class ChatApp(App):
             self._log(" [bold cyan]/group revoke <id> <dev>[/bold cyan]  (Admin) Revoke member access")
             self._log(" [bold cyan]/group addadmin <id> <dev>[/bold cyan] (Admin) Add an administrator")
             self._log(" [bold cyan]/group policy <id> [k=v][/bold cyan] View or set group policy")
+            self._log(" [bold cyan]/group audit <id> [limit][/bold cyan] (Admin) View signed audit log")
             self._log("[dim cyan]────────────────────────────────────────────────────────[/dim cyan]")
             self._log(" [bold cyan]/quit[/bold cyan] or [bold cyan]/exit[/bold cyan]          Exit application")
             self._log("[bold yellow]╚═══════════════════════ Shortcuts ══════════════════════╝[/bold yellow]")

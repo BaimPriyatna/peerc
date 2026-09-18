@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.16.5] — Phase 42.5: Signed Audit Log (completes Phase 42: Group Authority System)
+
+### Added
+- **`core/group/audit.py`** [NEW]: signed audit logging for Group Authority actions (§13 `GROUP_AUTHORITY_DESIGN.md`). Integrates with Phase 41's `SecurityEvent` architecture using Ed25519 domain-separated signing (`_EVENT_DOMAIN`) over `event.canonical_payload()`. Functions: `sign_audit_event()`, `verify_audit_event()`, `create_group_audit_event()`, `verify_group_audit_event()` (verifies against current active admin public keys), and `format_audit_event()` (standardized formatting per §13).
+- **`core/group/store.py`**: `group_audit_log` table added to SQLite schema; `record_audit_event()` (with optional active-admin signature verification), `list_audit_events()` (filtering by event_type, severity, timestamp since, and limit), and `get_audit_event()`. Automatically records structured audit entries and emits security events on group lifecycle actions (`create_group`, `record_membership`, `revoke_membership`, `set_policy`, `add_admin`, `remove_admin`).
+- **`core/vault/database.py`**: unified encrypted vault database schema updated to include `group_audit_log`.
+- **`core/security/events.py`**: added standard group event types to `SecurityEventType`: `GROUP_CREATED`, `MEMBERSHIP_ISSUED`, `ADMIN_ADDED`, `MEMBERSHIP_REVOKED`, `ADMIN_REMOVED`.
+- **`ui.py`**: added `/group audit [group_id] [limit]` command allowing users and admins to view the group's chronological audit log with badge indicators for verified admin signatures, unsigned events, and invalid signatures. Updated `/help` with the audit command.
+- **`tests/test_group_audit.py`** [NEW]: 10 tests covering audit event creation, Ed25519 signing/verification, tamper rejection, active admin validation, `GroupStore` record/list filtering, lifecycle auto-auditing, formatting, and Textual UI command execution.
+
 ## [1.16.4] — Phase 42.4: Join/Leave/Revoke protocol messages
 
 ### Added

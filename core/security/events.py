@@ -102,12 +102,17 @@ class SecurityEventType(str, enum.Enum):
     ENDPOINT_CHANGED = "endpoint_changed"
     KEY_ROTATION = "key_rotation"
     POLICY_CHANGED = "policy_changed"
+    GROUP_CREATED = "group_created"
+    MEMBERSHIP_ISSUED = "membership_issued"
+    ADMIN_ADDED = "admin_added"
 
     # WARNING
     UNKNOWN_DEVICE = "unknown_device"
     IDENTITY_CHANGED = "identity_changed"
     AUTH_FAILED = "auth_failed"
     INVALID_ROTATION = "invalid_rotation"
+    MEMBERSHIP_REVOKED = "membership_revoked"
+    ADMIN_REMOVED = "admin_removed"
 
     # HIGH
     REVOKED_DEVICE_ATTEMPT = "revoked_device_attempt"

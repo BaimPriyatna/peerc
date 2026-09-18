@@ -46,14 +46,15 @@ development into maintenance/updates, not before.
 | `1.16.2` | 3.4 | Identity display metadata: `core/device_info.py` [NEW] `detect_device_model()` — best-effort, deliberately never persisted (recomputed fresh every run, see §37 `SECURITY_MODEL.md`); `DeviceIdentity.is_new` + first-run `NameSetupModal` (set a display name before the app proceeds, defaults to "peer" if skipped); `model` threaded through both discovery transports (UDP broadcast + mDNS) the same way `name` already was, shown in the peer list/`/info`; `/nick` renamed to `/name` (validation factored into shared `validate_display_name()`, still enforces BUG-020's control-char/newline/length rules) |
 | `1.16.3` | 42.3 | `core/group/admin.py` [NEW]: `AdminRecord`, `ThresholdApproval` — k-of-n signature collection for any admin-gated action, Ed25519-signed (§14 Multiple Administrators, `SECURITY_MODEL.md` §22); storage-agnostic (`count_valid_signatures`/`is_approved` take the caller's current active-admin set, so a since-removed admin's signature silently stops counting). `store.py` gains `group_admins` table + `add_admin`/`remove_admin` (refuses removing the last active admin)/`list_admins`/`get_active_admin_public_keys`; `create_group()` now auto-registers the founder as the first active admin; `record_membership()`/`set_policy()` now accept a signature from ANY currently-active admin, not just the founder |
 | `1.16.4` | 42.4 | `core/group/protocol.py` [NEW]: signed Join/Leave/Revoke control-plane payloads (`GroupJoinRequest`/`GroupJoinResponse`, `GroupLeaveRequest`/`GroupLeaveResponse`, `MembershipRevocation`) with domain-separated Ed25519 signatures and join self-consistency checks (`device_id == sha256(public_key)`); `core/protocol/messages.py` gains wire factories/validation for `group_join_request`, `group_join_response`, `group_leave_request`, `group_leave_response`, `group_membership_revoke`; `GroupStore` gains `process_join_response`/`process_leave_request`/`process_leave_response`/`record_revocation` + tombstone metadata accessor; vault schema now includes `group_admins`. UI commands and signed audit log still deferred |
+| `1.16.5` | 42.5 | `core/group/audit.py` [NEW]: signed audit log (`sign_audit_event`/`verify_audit_event`/`create_group_audit_event`/`verify_group_audit_event`/`format_audit_event`) extending Phase 41's `SecurityEvent` with admin Ed25519 signatures; `GroupStore` gains `group_audit_log` table, `record_audit_event`/`list_audit_events`/`get_audit_event`, and automatic lifecycle audit recording (`create_group`, `record_membership`, `revoke_membership`, `set_policy`, `add_admin`, `remove_admin`); vault schema updated; `ui.py` gains `/group audit` command. Completes Phase 42 (Group Authority System) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
 (Session Keys), Phase 8 (ChaCha20-Poly1305 Encryption), Phase 9
 (Secure Transport Layer), Phase 12–20 (File Transfer V2 + Hardening),
 Phase 26 (Event Architecture), Phase 39 (Secure Storage), Phase 40
-(Device Key Rotation), and Phase 41 (Security Event Logging) are
-complete.**
+(Device Key Rotation), Phase 41 (Security Event Logging), and Phase 42
+(Group Authority System) are complete.**
 
 ## Designed, not yet coded
 
@@ -79,8 +80,8 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. **Phase 42 — Group Authority System** (in progress: 42.1 `membership.py`+storage landed as `1.16.0`; 42.2 `policy.py`+enforcement landed as `1.16.1`; 42.3 `admin.py`+multi-admin landed as `1.16.3`; 42.4 Join/Leave/Revoke protocol messages landed as `1.16.4`; 42.5 `audit.py` still to come) ← next
-2. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
+1. **Phase 42 — Group Authority System** (complete: 42.1 landed as `1.16.0`; 42.2 landed as `1.16.1`; 42.3 landed as `1.16.3`; 42.4 landed as `1.16.4`; 42.5 landed as `1.16.5`)
+2. **Phase 43 — Group-Gated Export Authorization** (design-complete, depends on 39+42) ← next
 3. **Phase 44 — Internet P2P Connectivity** (design-complete)
 4. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
 5. Phase 36/37 — UI/security UX

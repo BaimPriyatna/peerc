@@ -10,10 +10,18 @@
     admin.py       — AdminRecord, ThresholdApproval (k-of-n signature collection
                      for admin-gated actions) (§14 Multiple Administrators)
 
-Not yet present (later Phase 42 sub-step, see docs/GROUP_AUTHORITY_DESIGN.md
-and the ROADMAP): audit.py (signed audit log).
+    audit.py       — signed audit log, verification against active admins,
+                     and formatted accountability records (§13 Audit Log)
 """
 
+from .audit import (
+    AuditError,
+    create_group_audit_event,
+    format_audit_event,
+    sign_audit_event,
+    verify_audit_event,
+    verify_group_audit_event,
+)
 from .admin import (
     AdminError,
     AdminRecord,
@@ -101,6 +109,13 @@ __all__ = [
     "PolicyEnforcer",
     "PolicyError",
     "PolicyViolationError",
+    # Phase 42.5: signed audit log
+    "AuditError",
+    "create_group_audit_event",
+    "format_audit_event",
+    "sign_audit_event",
+    "verify_audit_event",
+    "verify_group_audit_event",
     # Phase 42.3: multi-admin + k-of-n threshold signatures
     "AdminError",
     "AdminRecord",

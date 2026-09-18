@@ -141,6 +141,18 @@ CREATE TABLE IF NOT EXISTS group_admins (
     removed_by  TEXT,
     PRIMARY KEY (group_id, device_id)
 );
+CREATE TABLE IF NOT EXISTS group_audit_log (
+    event_id         TEXT PRIMARY KEY,
+    group_id         TEXT NOT NULL,
+    event_type       TEXT NOT NULL,
+    severity         TEXT NOT NULL,
+    description      TEXT NOT NULL,
+    device_id        TEXT,
+    timestamp        REAL NOT NULL,
+    details          TEXT NOT NULL,
+    signature        TEXT,
+    signer_device_id TEXT
+);
 """
 
 
