@@ -30,7 +30,7 @@ import base64
 import struct
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from core.identity.device_identity import DeviceKeypair, public_key_from_bytes
 from core.security import SecurityEvent, SecurityEventType, SecuritySeverity, emit
@@ -59,6 +59,9 @@ class AdminRecord:
     public_key: str  # base64(raw 32 bytes)
     added_at: float
     added_by: Optional[str] = None
+    status: Any = "active"
+    removed_at: Optional[float] = None
+    removed_by: Optional[str] = None
 
 
 @dataclass

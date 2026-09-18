@@ -33,10 +33,13 @@ Cursor & Mouse:
 """
 
 import asyncio
+import base64
 import os
 import shutil
 import subprocess
+import time
 from typing import Optional
+import uuid
 
 from rich.markup import escape as rich_escape
 from rich.style import Style
@@ -63,7 +66,34 @@ import file_transfer
 import protocol
 from core.trust.store import DEFAULT_DB_PATH as TRUST_DB_LEGACY_PATH
 from core.trust.store import TrustStore
-from core.group import GroupStore
+from core.group import (
+    AdminStatus,
+    Group,
+    GroupPolicy,
+    GroupStore,
+    MembershipCertificate,
+    MembershipStatus,
+    create_group,
+    issue_membership_certificate,
+)
+from core.group.protocol import (
+    GroupJoinRequest,
+    GroupJoinResponse,
+    GroupLeaveRequest,
+    GroupLeaveResponse,
+    MembershipRevocation,
+    create_join_request,
+    create_join_response,
+    create_leave_request,
+    create_leave_response,
+    create_membership_revocation,
+    verify_join_request,
+    verify_join_response,
+    verify_leave_request,
+    verify_leave_response,
+    verify_membership_revocation,
+)
+from core.identity.device_identity import compute_device_id
 from core.vault import (
     DEFAULT_AUTO_LOCK_SECONDS,
     RecoveryCodeError,
@@ -515,6 +545,10 @@ class ChatApp(App):
         # Phase 39.5: secure storage paths
         self.secure_storage_dir = os.path.expanduser("~/.peerc/secure")
         self.downloads_dir = "downloads"
+
+        # Phase 42.4: Group Authority join/leave pending requests
+        self._pending_join_requests: dict[str, tuple[str, GroupJoinRequest]] = {}
+        self._pending_leave_requests: dict[str, tuple[str, GroupLeaveRequest]] = {}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -1052,6 +1086,846 @@ class ChatApp(App):
 
     # ---- End Phase 39.5 file actions -----------------------------------
 
+    # ---- Phase 42: Group Authority command handlers & network callbacks ----
+
+    async def _handle_group_command(self, arg: str) -> None:
+        """Dispatcher for /group and /groups commands."""
+        if self.group_store is None:
+            self._log("[red]Vault is locked — unlock first to access Group Authority.[/red]")
+            return
+
+        parts = arg.strip().split(maxsplit=2)
+        subcmd = parts[0].lower() if parts else "list"
+        rest = parts[1] if len(parts) > 1 else ""
+        extra = parts[2] if len(parts) > 2 else ""
+
+        if subcmd in ("list", "ls") or not arg.strip():
+            await self._handle_group_list()
+        elif subcmd == "create":
+            await self._handle_group_create(rest, extra if extra else None)
+        elif subcmd == "info":
+            await self._handle_group_info(rest)
+        elif subcmd == "members":
+            await self._handle_group_members(rest)
+        elif subcmd == "admins":
+            await self._handle_group_admins(rest)
+        elif subcmd == "join":
+            await self._handle_group_join(rest, extra)
+        elif subcmd == "leave":
+            await self._handle_group_leave(rest, extra)
+        elif subcmd == "approve":
+            await self._handle_group_approve(rest, extra)
+        elif subcmd == "reject":
+            await self._handle_group_reject(rest, extra)
+        elif subcmd == "approve-leave":
+            await self._handle_group_approve_leave(rest, extra)
+        elif subcmd == "reject-leave":
+            await self._handle_group_reject_leave(rest, extra)
+        elif subcmd == "revoke":
+            await self._handle_group_revoke(rest, extra)
+        elif subcmd == "addadmin":
+            await self._handle_group_add_admin(rest, extra)
+        elif subcmd == "policy":
+            await self._handle_group_policy(rest, extra)
+        else:
+            self._log(f"[yellow]Unknown group subcommand: '{subcmd}'. Type /help for usage.[/yellow]")
+
+    async def _handle_group_list(self) -> None:
+        groups = self.group_store.list_groups()
+        if not groups:
+            self._log("[yellow]No groups found. Use /group create <name> to create one.[/yellow]")
+            return
+        self._log("[bold yellow]╔═════════════════════ Groups ═════════════════════╗[/bold yellow]")
+        for g in groups:
+            is_admin = self.group_store.is_admin(g.group_id, self.peer_id)
+            role_str = "[bold green]Admin[/bold green]" if is_admin else "Member"
+            status = self.group_store.get_membership_status(g.group_id, self.peer_id)
+            status_str = f" [{status.value}]" if status else " [not joined]"
+            self._log(f"  • [bold]{g.name}[/bold] (id: [cyan]{g.group_id}[/cyan]) — {role_str}{status_str}")
+        self._log("[bold yellow]╚═══════════════════════════════════════════════════╝[/bold yellow]")
+        self._log("[dim]Use /group info <id>, /group members <id>, or /group admins <id>[/dim]")
+
+    async def _handle_group_create(self, name: str, group_id: Optional[str] = None) -> None:
+        if not name:
+            self._log("[yellow]Usage: /group create <name> [group_id][/yellow]")
+            return
+        if self.my_identity is None:
+            self._log("[red]Identity not initialized.[/red]")
+            return
+
+        gid = group_id.strip() if group_id else uuid.uuid4().hex[:8]
+        group = create_group(admin_keypair=self.my_identity, name=name, group_id=gid)
+        try:
+            self.group_store.create_group(group)
+            cert = issue_membership_certificate(
+                self.my_identity,
+                device_id=self.peer_id,
+                device_public_key=self.public_key_bytes,
+                group_id=gid,
+                role="admin",
+                permissions=["chat", "file", "export", "admin"],
+            )
+            self.group_store.record_membership(cert)
+            self._log(f"[green]✓ Group [bold]{name}[/bold] created! ID: [cyan]{gid}[/cyan] (you are Admin)[/green]")
+        except Exception as e:
+            self._log(f"[red]Failed to create group: {e}[/red]")
+
+    async def _handle_group_info(self, group_id: str) -> None:
+        if not group_id:
+            groups = self.group_store.list_groups()
+            if len(groups) == 1:
+                group_id = groups[0].group_id
+            else:
+                self._log("[yellow]Usage: /group info <group_id>[/yellow]")
+                return
+
+        group = self.group_store.get_group(group_id)
+        if group is None:
+            self._log(f"[red]Group '{group_id}' not found.[/red]")
+            return
+
+        admins = self.group_store.list_admins(group_id)
+        members = self.group_store.list_memberships(group_id)
+        policy = self.group_store.get_policy(group_id)
+        is_admin = self.group_store.is_admin(group_id, self.peer_id)
+
+        self._log(f"[bold yellow]╔════════════ Group Details: {group.name} ({group.group_id}) ════════════╗[/bold yellow]")
+        self._log(f"  [bold]Group ID:[/bold]     [cyan]{group.group_id}[/cyan]")
+        self._log(f"  [bold]Founder:[/bold]      {group.admin_device_id[:8]}...")
+        self._log(f"  [bold]Your Role:[/bold]    {'[bold green]Admin[/bold green]' if is_admin else 'Member'}")
+        self._log(f"  [bold]Admins ({len(admins)}):[/bold]   {', '.join(a.device_id[:8] for a in admins if a.status == AdminStatus.ACTIVE)}")
+        self._log(f"  [bold]Members:[/bold]      {len(members)} total")
+        if policy is None:
+            self._log("  [bold]Policy:[/bold]       default (all allowed)")
+        else:
+            self._log(
+                f"  [bold]Policy:[/bold]       ext_trust={policy.allow_external_trust}, "
+                f"export={policy.allow_export}, leave_req_admin={policy.leave_requires_admin}"
+            )
+        self._log("[bold yellow]╚═══════════════════════════════════════════════════╝[/bold yellow]")
+
+    async def _handle_group_members(self, group_id: str) -> None:
+        if not group_id:
+            groups = self.group_store.list_groups()
+            if len(groups) == 1:
+                group_id = groups[0].group_id
+            else:
+                self._log("[yellow]Usage: /group members <group_id>[/yellow]")
+                return
+
+        group = self.group_store.get_group(group_id)
+        if group is None:
+            self._log(f"[red]Group '{group_id}' not found.[/red]")
+            return
+
+        members = self.group_store.list_memberships(group_id)
+        self._log(f"[bold yellow]╔════════════ Members: {group.name} ({len(members)}) ════════════╗[/bold yellow]")
+        if not members:
+            self._log("  [dim]No members recorded yet.[/dim]")
+        for m in members:
+            status_color = "green" if m.status == MembershipStatus.ACTIVE.value else "red"
+            is_you = " [bold cyan](YOU)[/bold cyan]" if m.device_id == self.peer_id else ""
+            perms = ",".join(m.permissions) if m.permissions else "none"
+            self._log(
+                f"  • [bold]{m.device_id[:8]}[/bold]{is_you} | "
+                f"Role: [cyan]{m.role}[/cyan] | "
+                f"Status: [{status_color}]{m.status}[/{status_color}] | "
+                f"Perms: {perms}"
+            )
+        self._log("[bold yellow]╚═══════════════════════════════════════════════════╝[/bold yellow]")
+
+    async def _handle_group_admins(self, group_id: str) -> None:
+        if not group_id:
+            groups = self.group_store.list_groups()
+            if len(groups) == 1:
+                group_id = groups[0].group_id
+            else:
+                self._log("[yellow]Usage: /group admins <group_id>[/yellow]")
+                return
+
+        group = self.group_store.get_group(group_id)
+        if group is None:
+            self._log(f"[red]Group '{group_id}' not found.[/red]")
+            return
+
+        admins = self.group_store.list_admins(group_id)
+        self._log(f"[bold yellow]╔════════════ Admins: {group.name} ({len(admins)}) ════════════╗[/bold yellow]")
+        for a in admins:
+            status_color = "green" if a.status == AdminStatus.ACTIVE else "red"
+            is_you = " [bold cyan](YOU)[/bold cyan]" if a.device_id == self.peer_id else ""
+            self._log(
+                f"  • [bold]{a.device_id[:8]}[/bold]{is_you} | "
+                f"Status: [{status_color}]{a.status.value}[/{status_color}]"
+            )
+        self._log("[bold yellow]╚═══════════════════════════════════════════════════╝[/bold yellow]")
+
+    async def _handle_group_join(self, group_id: str, peer_arg: str = "") -> None:
+        if not group_id:
+            self._log("[yellow]Usage: /group join <group_id> [peer_name_or_id][/yellow]")
+            return
+        if self.my_identity is None:
+            self._log("[red]Identity not initialized.[/red]")
+            return
+
+        target_peer = None
+        if peer_arg:
+            target_peer = next(
+                (p for p in self.registry.list_peers()
+                 if peer_arg.lower() in p.name.lower() or p.peer_id.startswith(peer_arg)),
+                None,
+            )
+            if target_peer is None:
+                self._log(f"[red]No peer matching '{peer_arg}' found.[/red]")
+                return
+        elif self.active_peer_id:
+            target_peer = self.registry.get(self.active_peer_id)
+
+        if target_peer is None:
+            self._log("[red]No target peer specified or active. Use /group join <group_id> <peer>[/red]")
+            return
+
+        addr_key = f"{target_peer.ip}:{target_peer.tcp_port}"
+        connected = await self._ensure_connected(addr_key)
+        if not connected:
+            self._log(f"[red]Could not connect to {target_peer.name} ({addr_key})[/red]")
+            return
+
+        req = create_join_request(
+            self.my_identity,
+            group_id=group_id,
+            requested_role="member",
+            requested_permissions=["chat", "file"],
+            reason="Join request from peerc UI",
+        )
+        wire = protocol.make_group_join_request(
+            request_id=req.request_id,
+            group_id=req.group_id,
+            device_id=req.device_id,
+            device_public_key=req.device_public_key,
+            requested_role=req.requested_role,
+            requested_permissions=req.requested_permissions,
+            signature=req.signature,
+            reason=req.reason,
+            timestamp=req.timestamp,
+        )
+        try:
+            await self.manager.send(addr_key, wire)
+            self._log(f"[cyan]Sent join request for group '{group_id}' to {target_peer.name} ({target_peer.peer_id[:8]}).[/cyan]")
+        except Exception as e:
+            self._log(f"[red]Failed to send join request: {e}[/red]")
+
+    async def _handle_group_approve(self, group_id: str, extra: str) -> None:
+        if not group_id or not extra:
+            self._log("[yellow]Usage: /group approve <group_id> <device_id> [role][/yellow]")
+            return
+        if self.my_identity is None:
+            self._log("[red]Identity not initialized.[/red]")
+            return
+
+        parts = extra.split(maxsplit=1)
+        device_id = parts[0]
+        role = parts[1] if len(parts) > 1 else None
+
+        pending_entry = None
+        match_key = None
+        for k, (ak, r) in self._pending_join_requests.items():
+            if r.group_id == group_id and (r.device_id.startswith(device_id) or r.request_id.startswith(device_id)):
+                pending_entry = (ak, r)
+                match_key = k
+                break
+
+        if pending_entry is not None:
+            addr_key, req = pending_entry
+            pub_bytes = base64.b64decode(req.device_public_key)
+            target_device_id = req.device_id
+            target_role = role or req.requested_role or "member"
+            perms = req.requested_permissions or ["chat", "file"]
+        else:
+            peer = self.registry.get(device_id) or next(
+                (p for p in self.registry.list_peers() if p.peer_id.startswith(device_id) or p.name.lower() == device_id.lower()),
+                None,
+            )
+            if peer is None or not peer.public_key:
+                self._log(f"[red]No pending join request or peer with public key found for '{device_id}'.[/red]")
+                return
+            addr_key = f"{peer.ip}:{peer.tcp_port}"
+            pub_bytes = peer.public_key
+            target_device_id = peer.peer_id
+            target_role = role or "member"
+            perms = ["chat", "file"]
+            req = None
+
+        cert = issue_membership_certificate(
+            self.my_identity,
+            device_id=target_device_id,
+            device_public_key=pub_bytes,
+            group_id=group_id,
+            role=target_role,
+            permissions=perms,
+        )
+        try:
+            self.group_store.record_membership(cert)
+        except Exception as e:
+            self._log(f"[red]Failed to record membership: {e}[/red]")
+            return
+
+        if req is not None:
+            res = create_join_response(
+                self.my_identity,
+                req,
+                approved=True,
+                certificate=cert,
+                reason="Approved by administrator",
+            )
+            wire = protocol.make_group_join_response(
+                request_id=res.request_id,
+                group_id=res.group_id,
+                device_id=res.device_id,
+                approved=res.approved,
+                admin_device_id=res.admin_device_id,
+                signature=res.signature,
+                certificate=cert.to_dict(),
+                reason=res.reason,
+                timestamp=res.timestamp,
+            )
+            try:
+                await self.manager.send(addr_key, wire)
+            except Exception as e:
+                self._log(f"[yellow]Membership recorded, but failed to send wire response: {e}[/yellow]")
+            if match_key:
+                self._pending_join_requests.pop(match_key, None)
+
+        self._log(f"[green]✓ Approved membership for {target_device_id[:8]} in group '{group_id}' (role: {target_role}).[/green]")
+
+    async def _handle_group_reject(self, group_id: str, extra: str) -> None:
+        if not group_id or not extra:
+            self._log("[yellow]Usage: /group reject <group_id> <device_id> [reason][/yellow]")
+            return
+        if self.my_identity is None:
+            self._log("[red]Identity not initialized.[/red]")
+            return
+
+        parts = extra.split(maxsplit=1)
+        device_id = parts[0]
+        reason = parts[1] if len(parts) > 1 else "Rejected by administrator"
+
+        match_key = None
+        pending_entry = None
+        for k, (ak, r) in self._pending_join_requests.items():
+            if r.group_id == group_id and (r.device_id.startswith(device_id) or r.request_id.startswith(device_id)):
+                pending_entry = (ak, r)
+                match_key = k
+                break
+
+        if pending_entry is None:
+            self._log(f"[red]No pending join request found for '{device_id}' in group '{group_id}'.[/red]")
+            return
+
+        addr_key, req = pending_entry
+        res = create_join_response(
+            self.my_identity,
+            req,
+            approved=False,
+            reason=reason,
+        )
+        wire = protocol.make_group_join_response(
+            request_id=res.request_id,
+            group_id=res.group_id,
+            device_id=res.device_id,
+            approved=res.approved,
+            admin_device_id=res.admin_device_id,
+            signature=res.signature,
+            reason=res.reason,
+            timestamp=res.timestamp,
+        )
+        try:
+            await self.manager.send(addr_key, wire)
+        except Exception as e:
+            self._log(f"[yellow]Failed to send wire rejection: {e}[/yellow]")
+
+        if match_key:
+            self._pending_join_requests.pop(match_key, None)
+        self._log(f"[yellow]Rejected join request for {req.device_id[:8]} in group '{group_id}'.[/yellow]")
+
+    async def _handle_group_leave(self, group_id: str, reason: str = "") -> None:
+        if not group_id:
+            self._log("[yellow]Usage: /group leave <group_id> [reason][/yellow]")
+            return
+        if self.my_identity is None:
+            self._log("[red]Identity not initialized.[/red]")
+            return
+
+        cert = self.group_store.get_membership(group_id, self.peer_id)
+        if cert is None:
+            self._log(f"[red]You are not a member of group '{group_id}'.[/red]")
+            return
+
+        policy = self.group_store.get_policy(group_id)
+        req = create_leave_request(self.my_identity, group_id=group_id, reason=reason or "Leaving group")
+
+        if policy and policy.leave_requires_admin:
+            admins = self.group_store.list_admins(group_id)
+            target_admin = next((a for a in admins if a.status == AdminStatus.ACTIVE and a.device_id != self.peer_id), None)
+            if target_admin is None:
+                self._log("[red]No active administrator found for this group to approve leave.[/red]")
+                return
+
+            peer = self.registry.get(target_admin.device_id)
+            if peer is None:
+                self._log(f"[yellow]Leave requires admin approval, but admin {target_admin.device_id[:8]} is offline.[/yellow]")
+                return
+            addr_key = f"{peer.ip}:{peer.tcp_port}"
+            connected = await self._ensure_connected(addr_key)
+            if not connected:
+                self._log(f"[red]Could not connect to admin at {addr_key}[/red]")
+                return
+
+            wire = protocol.make_group_leave_request(
+                request_id=req.request_id,
+                group_id=req.group_id,
+                device_id=req.device_id,
+                signature=req.signature,
+                reason=req.reason,
+                timestamp=req.timestamp,
+            )
+            try:
+                await self.manager.send(addr_key, wire)
+                self._log(f"[yellow]Leave request submitted for group '{group_id}'. Waiting for administrator approval.[/yellow]")
+            except Exception as e:
+                self._log(f"[red]Failed to send leave request: {e}[/red]")
+        else:
+            try:
+                self.group_store.process_leave_request(req)
+                self._log(f"[green]✓ You have left group '{group_id}'.[/green]")
+            except Exception as e:
+                self._log(f"[red]Failed to process leave: {e}[/red]")
+
+    async def _handle_group_approve_leave(self, group_id: str, extra: str) -> None:
+        if not group_id or not extra:
+            self._log("[yellow]Usage: /group approve-leave <group_id> <device_id>[/yellow]")
+            return
+        if self.my_identity is None:
+            self._log("[red]Identity not initialized.[/red]")
+            return
+
+        device_id = extra.strip().split()[0]
+        match_key = None
+        pending_entry = None
+        for k, (ak, r) in self._pending_leave_requests.items():
+            if r.group_id == group_id and (r.device_id.startswith(device_id) or r.request_id.startswith(device_id)):
+                pending_entry = (ak, r)
+                match_key = k
+                break
+
+        if pending_entry is None:
+            self._log(f"[red]No pending leave request found for '{device_id}' in group '{group_id}'.[/red]")
+            return
+
+        addr_key, req = pending_entry
+        revoc = create_membership_revocation(
+            self.my_identity,
+            group_id=group_id,
+            device_id=req.device_id,
+            reason=req.reason or "Leave approved by admin",
+        )
+        res = create_leave_response(
+            self.my_identity,
+            req,
+            approved=True,
+            revocation=revoc,
+            reason="Leave approved by administrator",
+        )
+        try:
+            self.group_store.process_leave_response(res)
+        except Exception as e:
+            self._log(f"[red]Failed to process leave locally: {e}[/red]")
+            return
+
+        wire = protocol.make_group_leave_response(
+            request_id=res.request_id,
+            group_id=res.group_id,
+            device_id=res.device_id,
+            approved=res.approved,
+            admin_device_id=res.admin_device_id,
+            signature=res.signature,
+            revocation=revoc.to_dict(),
+            reason=res.reason,
+            timestamp=res.timestamp,
+        )
+        try:
+            await self.manager.send(addr_key, wire)
+        except Exception as e:
+            self._log(f"[yellow]Leave processed locally, but failed to send wire response: {e}[/yellow]")
+
+        if match_key:
+            self._pending_leave_requests.pop(match_key, None)
+        self._log(f"[green]✓ Approved leave for {req.device_id[:8]} from group '{group_id}'.[/green]")
+
+    async def _handle_group_reject_leave(self, group_id: str, extra: str) -> None:
+        if not group_id or not extra:
+            self._log("[yellow]Usage: /group reject-leave <group_id> <device_id> [reason][/yellow]")
+            return
+        if self.my_identity is None:
+            self._log("[red]Identity not initialized.[/red]")
+            return
+
+        parts = extra.strip().split(maxsplit=1)
+        device_id = parts[0]
+        reason = parts[1] if len(parts) > 1 else "Leave rejected by administrator"
+
+        match_key = None
+        pending_entry = None
+        for k, (ak, r) in self._pending_leave_requests.items():
+            if r.group_id == group_id and (r.device_id.startswith(device_id) or r.request_id.startswith(device_id)):
+                pending_entry = (ak, r)
+                match_key = k
+                break
+
+        if pending_entry is None:
+            self._log(f"[red]No pending leave request found for '{device_id}' in group '{group_id}'.[/red]")
+            return
+
+        addr_key, req = pending_entry
+        res = create_leave_response(
+            self.my_identity,
+            req,
+            approved=False,
+            reason=reason,
+        )
+        wire = protocol.make_group_leave_response(
+            request_id=res.request_id,
+            group_id=res.group_id,
+            device_id=res.device_id,
+            approved=res.approved,
+            admin_device_id=res.admin_device_id,
+            signature=res.signature,
+            reason=res.reason,
+            timestamp=res.timestamp,
+        )
+        try:
+            await self.manager.send(addr_key, wire)
+        except Exception as e:
+            self._log(f"[yellow]Failed to send wire rejection: {e}[/yellow]")
+
+        if match_key:
+            self._pending_leave_requests.pop(match_key, None)
+        self._log(f"[yellow]Rejected leave request for {req.device_id[:8]} from group '{group_id}'.[/yellow]")
+
+    async def _handle_group_revoke(self, group_id: str, extra: str) -> None:
+        if not group_id or not extra:
+            self._log("[yellow]Usage: /group revoke <group_id> <device_id> [reason][/yellow]")
+            return
+        if self.my_identity is None:
+            self._log("[red]Identity not initialized.[/red]")
+            return
+
+        parts = extra.strip().split(maxsplit=1)
+        device_id = parts[0]
+        reason = parts[1] if len(parts) > 1 else "Revoked by administrator"
+
+        if not self.group_store.is_admin(group_id, self.peer_id):
+            self._log(f"[red]You are not an administrator of group '{group_id}'.[/red]")
+            return
+
+        cert = self.group_store.get_membership(group_id, device_id)
+        if cert is None:
+            all_m = self.group_store.list_memberships(group_id)
+            match_m = next((m for m in all_m if m.device_id.startswith(device_id)), None)
+            if match_m:
+                cert = match_m
+                device_id = match_m.device_id
+
+        if cert is None:
+            self._log(f"[red]No membership found for device '{device_id}' in group '{group_id}'.[/red]")
+            return
+
+        revoc = create_membership_revocation(
+            self.my_identity,
+            group_id=group_id,
+            device_id=device_id,
+            reason=reason,
+        )
+        try:
+            self.group_store.record_revocation(revoc)
+            self._log(f"[green]✓ Revoked membership for {device_id[:8]} in group '{group_id}'.[/green]")
+        except Exception as e:
+            self._log(f"[red]Failed to revoke membership: {e}[/red]")
+            return
+
+        wire = protocol.make_group_membership_revoke(
+            revocation_id=revoc.revocation_id,
+            group_id=revoc.group_id,
+            device_id=revoc.device_id,
+            revoked_by=revoc.revoked_by,
+            signature=revoc.signature,
+            reason=revoc.reason,
+            timestamp=revoc.timestamp,
+        )
+        peer = self.registry.get(device_id)
+        if peer:
+            addr_key = f"{peer.ip}:{peer.tcp_port}"
+            if self.manager.is_connected(addr_key):
+                try:
+                    await self.manager.send(addr_key, wire)
+                except Exception:
+                    pass
+
+    async def _handle_group_add_admin(self, group_id: str, extra: str) -> None:
+        if not group_id or not extra:
+            self._log("[yellow]Usage: /group addadmin <group_id> <device_id>[/yellow]")
+            return
+
+        device_id = extra.strip().split()[0]
+        if not self.group_store.is_admin(group_id, self.peer_id):
+            self._log(f"[red]You are not an administrator of group '{group_id}'.[/red]")
+            return
+
+        cert = self.group_store.get_membership(group_id, device_id)
+        pub_key = None
+        if cert:
+            pub_key = base64.b64decode(cert.device_public_key)
+            device_id = cert.device_id
+        else:
+            all_m = self.group_store.list_memberships(group_id)
+            match_m = next((m for m in all_m if m.device_id.startswith(device_id)), None)
+            if match_m:
+                pub_key = base64.b64decode(match_m.device_public_key)
+                device_id = match_m.device_id
+            else:
+                peer = self.registry.get(device_id) or next(
+                    (p for p in self.registry.list_peers() if p.peer_id.startswith(device_id)), None
+                )
+                if peer and peer.public_key:
+                    pub_key = peer.public_key
+                    device_id = peer.peer_id
+
+        if pub_key is None:
+            self._log(f"[red]Could not find public key for device '{device_id}'.[/red]")
+            return
+
+        try:
+            self.group_store.add_admin(group_id, device_id, pub_key, added_by=self.peer_id)
+            self._log(f"[green]✓ Device {device_id[:8]} is now an administrator of group '{group_id}'.[/green]")
+        except Exception as e:
+            self._log(f"[red]Failed to add admin: {e}[/red]")
+
+    async def _handle_group_policy(self, group_id: str, extra: str) -> None:
+        if not group_id:
+            groups = self.group_store.list_groups()
+            if len(groups) == 1:
+                group_id = groups[0].group_id
+            else:
+                self._log("[yellow]Usage: /group policy <group_id> [key=value ...][/yellow]")
+                return
+
+        group = self.group_store.get_group(group_id)
+        if group is None:
+            self._log(f"[red]Group '{group_id}' not found.[/red]")
+            return
+
+        policy = self.group_store.get_policy(group_id)
+        if not extra.strip():
+            self._log(f"[bold yellow]╔════════════ Group Policy: {group.name} ════════════╗[/bold yellow]")
+            if policy is None:
+                self._log("  [dim]Default policy active (all actions allowed):[/dim]")
+                self._log("  • allow_external_trust:  [green]True[/green]")
+                self._log("  • allow_export:          [green]True[/green]")
+                self._log("  • leave_requires_admin:  [cyan]False[/cyan]")
+                self._log("  • allow_inter_group:     [green]True[/green]")
+            else:
+                ext_col = "green" if policy.allow_external_trust else "red"
+                exp_col = "green" if policy.allow_export else "red"
+                lra_col = "yellow" if policy.leave_requires_admin else "cyan"
+                aig_col = "green" if policy.allow_inter_group else "red"
+                self._log(f"  • allow_external_trust:  [{ext_col}]{policy.allow_external_trust}[/{ext_col}]")
+                self._log(f"  • allow_export:          [{exp_col}]{policy.allow_export}[/{exp_col}]")
+                self._log(f"  • leave_requires_admin:  [{lra_col}]{policy.leave_requires_admin}[/{lra_col}]")
+                self._log(f"  • allow_inter_group:     [{aig_col}]{policy.allow_inter_group}[/{aig_col}]")
+                if policy.admin_device_id:
+                    self._log(f"  • Set by admin:          {policy.admin_device_id[:8]}...")
+            self._log("[bold yellow]╚═════════════════════════════════════════════════════╝[/bold yellow]")
+            self._log("[dim]To change: /group policy <id> allow_external_trust=false leave_requires_admin=true[/dim]")
+            return
+
+        if not self.group_store.is_admin(group_id, self.peer_id):
+            self._log(f"[red]You must be an administrator of group '{group_id}' to modify policy.[/red]")
+            return
+
+        current = policy or GroupPolicy(group_id=group_id, admin_device_id=self.peer_id)
+        for pair in extra.split():
+            if "=" not in pair:
+                continue
+            k, v = pair.split("=", 1)
+            k = k.lower().strip()
+            val_bool = v.lower().strip() in ("1", "true", "yes", "on")
+            if k == "allow_external_trust":
+                current.allow_external_trust = val_bool
+            elif k == "allow_export":
+                current.allow_export = val_bool
+            elif k == "leave_requires_admin":
+                current.leave_requires_admin = val_bool
+            elif k == "allow_inter_group":
+                current.allow_inter_group = val_bool
+            else:
+                self._log(f"[yellow]Unknown policy field: {k}[/yellow]")
+
+        current.admin_device_id = self.peer_id
+        current.updated_at = time.time()
+        try:
+            self.group_store.set_policy(current)
+            self._log(f"[green]✓ Updated policy for group '{group_id}'.[/green]")
+        except Exception as e:
+            self._log(f"[red]Failed to set policy: {e}[/red]")
+
+    async def _on_group_join_request(self, addr_key: str, message: dict) -> None:
+        if self.group_store is None or self.my_identity is None:
+            return
+        try:
+            req = GroupJoinRequest.from_dict(message)
+        except Exception as e:
+            self._log(f"[dim]Ignored invalid group_join_request: {e}[/dim]")
+            return
+        if not verify_join_request(req):
+            self._log(f"[red][bold]SECURITY:[/bold] Invalid signature on join request from {req.device_id[:8]}[/red]")
+            return
+
+        if not self.group_store.is_admin(req.group_id, self.peer_id):
+            return
+
+        key = f"{req.group_id}:{req.device_id}"
+        self._pending_join_requests[key] = (addr_key, req)
+
+        group = self.group_store.get_group(req.group_id)
+        group_name = group.name if group else req.group_id
+        peer = self.registry.get(req.device_id)
+        sender_name = peer.name if peer else req.device_id[:8]
+
+        self._log(f"[bold yellow]╔════════════ Group Join Request: {req.device_id[:8]} ════════════╗[/bold yellow]")
+        self._log(f"  [bold]From:[/bold]   {sender_name} ({req.device_id[:8]})")
+        self._log(f"  [bold]Group:[/bold]  {group_name} ({req.group_id})")
+        self._log(f"  [bold]Role:[/bold]   {req.requested_role}")
+        if req.reason:
+            self._log(f"  [bold]Reason:[/bold] {rich_escape(req.reason)}")
+        self._log(
+            f"  [bold]Action:[/bold] [bold cyan]/group approve {req.group_id} {req.device_id[:8]}[/bold cyan] "
+            f"or [bold cyan]/group reject {req.group_id} {req.device_id[:8]}[/bold cyan]"
+        )
+        self._log("[bold yellow]╚════════════════════════════════════════════╝[/bold yellow]")
+
+    async def _on_group_join_response(self, addr_key: str, message: dict) -> None:
+        if self.group_store is None:
+            return
+        try:
+            res = GroupJoinResponse.from_dict(message)
+        except Exception as e:
+            self._log(f"[dim]Ignored invalid group_join_response: {e}[/dim]")
+            return
+
+        if not res.approved:
+            self._log(f"[red]✗ Join request for group '{res.group_id}' rejected: {res.reason or 'No reason provided'}[/red]")
+            return
+
+        group = self.group_store.get_group(res.group_id)
+        if group is None:
+            admin_pub = None
+            peer = self.registry.get(res.admin_device_id)
+            if peer and peer.public_key:
+                admin_pub = peer.public_key
+            else:
+                p_by_addr = next((p for p in self.registry.list_peers() if f"{p.ip}:{p.tcp_port}" == addr_key), None)
+                if p_by_addr and p_by_addr.public_key and compute_device_id(p_by_addr.public_key) == res.admin_device_id:
+                    admin_pub = p_by_addr.public_key
+            if admin_pub:
+                pub_b64 = base64.b64encode(admin_pub).decode("ascii")
+                self.group_store.create_group(Group(
+                    group_id=res.group_id,
+                    name=res.group_id,
+                    admin_device_id=res.admin_device_id,
+                    admin_public_key=pub_b64,
+                    created_at=time.time(),
+                ))
+
+        try:
+            self.group_store.process_join_response(res)
+            self._log(f"[green]✓ Joined group [bold]{res.group_id}[/bold]! Membership certificate verified and recorded.[/green]")
+        except Exception as e:
+            self._log(f"[red]Failed to process join response: {e}[/red]")
+
+    async def _on_group_leave_request(self, addr_key: str, message: dict) -> None:
+        if self.group_store is None or self.my_identity is None:
+            return
+        try:
+            req = GroupLeaveRequest.from_dict(message)
+        except Exception as e:
+            self._log(f"[dim]Ignored invalid group_leave_request: {e}[/dim]")
+            return
+
+        if not self.group_store.is_admin(req.group_id, self.peer_id):
+            return
+
+        cert = self.group_store.get_membership(req.group_id, req.device_id)
+        if cert:
+            if not verify_leave_request(req, base64.b64decode(cert.device_public_key)):
+                self._log(f"[red][bold]SECURITY:[/bold] Invalid signature on leave request from {req.device_id[:8]}[/red]")
+                return
+
+        key = f"{req.group_id}:{req.device_id}"
+        self._pending_leave_requests[key] = (addr_key, req)
+
+        group = self.group_store.get_group(req.group_id)
+        group_name = group.name if group else req.group_id
+        peer = self.registry.get(req.device_id)
+        sender_name = peer.name if peer else req.device_id[:8]
+
+        self._log("[bold yellow]╔════════════ Group Leave Request ════════════╗[/bold yellow]")
+        self._log(f"  [bold]From:[/bold]   {sender_name} ({req.device_id[:8]})")
+        self._log(f"  [bold]Group:[/bold]  {group_name} ({req.group_id})")
+        if req.reason:
+            self._log(f"  [bold]Reason:[/bold] {rich_escape(req.reason)}")
+        self._log(
+            f"  [bold]Action:[/bold] [bold cyan]/group approve-leave {req.group_id} {req.device_id[:8]}[/bold cyan] "
+            f"or [bold cyan]/group reject-leave {req.group_id} {req.device_id[:8]}[/bold cyan]"
+        )
+        self._log("[bold yellow]╚═════════════════════════════════════════════╝[/bold yellow]")
+
+    async def _on_group_leave_response(self, addr_key: str, message: dict) -> None:
+        if self.group_store is None:
+            return
+        try:
+            res = GroupLeaveResponse.from_dict(message)
+        except Exception as e:
+            self._log(f"[dim]Ignored invalid group_leave_response: {e}[/dim]")
+            return
+
+        if not res.approved:
+            self._log(f"[red]✗ Leave request for group '{res.group_id}' rejected: {res.reason or 'No reason provided'}[/red]")
+            return
+
+        try:
+            self.group_store.process_leave_response(res)
+            self._log(f"[green]✓ Leave approved for group '{res.group_id}'. Membership revoked.[/green]")
+        except Exception as e:
+            self._log(f"[red]Failed to apply leave response: {e}[/red]")
+
+    async def _on_group_membership_revoke(self, addr_key: str, message: dict) -> None:
+        if self.group_store is None:
+            return
+        try:
+            revoc = MembershipRevocation.from_dict(message)
+        except Exception as e:
+            self._log(f"[dim]Ignored invalid group_membership_revoke: {e}[/dim]")
+            return
+
+        try:
+            self.group_store.record_revocation(revoc)
+            self._log(
+                f"[bold red]SECURITY NOTICE:[/bold red] Membership in group '{revoc.group_id}' "
+                f"was revoked by admin ({revoc.revoked_by[:8]}). Reason: {revoc.reason or 'None'}"
+            )
+        except Exception as e:
+            self._log(f"[red]Failed to record revocation: {e}[/red]")
+
+
     def _perform_hard_lock(self) -> None:
         """Detach dependents, wipe DEK, flush+destroy the working copy.
         Does not show the unlock modal — caller handles that."""
@@ -1197,6 +2071,16 @@ class ChatApp(App):
                 self._refresh_peer_list()
                 if self.active_peer_id is None:
                     self.active_peer_id = peer_id
+        elif msg_type == "group_join_request":
+            await self._on_group_join_request(addr_key, evt.message)
+        elif msg_type == "group_join_response":
+            await self._on_group_join_response(addr_key, evt.message)
+        elif msg_type == "group_leave_request":
+            await self._on_group_leave_request(addr_key, evt.message)
+        elif msg_type == "group_leave_response":
+            await self._on_group_leave_response(addr_key, evt.message)
+        elif msg_type == "group_membership_revoke":
+            await self._on_group_membership_revoke(addr_key, evt.message)
 
     def _verify_self_reported_id(self, addr_key: str, claimed_peer_id: str) -> bool:
         """BUG-005: hello/hello_ack/chat messages carry a self-reported
@@ -1382,6 +2266,19 @@ class ChatApp(App):
             self._log(" [bold cyan]/export <file_id>[/bold cyan]     Export secure file to plaintext")
             self._log(" [bold cyan]/secure <filepath>[/bold cyan]    Move local file to secure storage")
             self._log(" [bold cyan]/delete <file_id>[/bold cyan]     Delete secure file permanently")
+            self._log("[dim cyan]───────────────────── Group Authority ───────────────────[/dim cyan]")
+            self._log(" [bold cyan]/groups[/bold cyan]                 List all managed groups & memberships")
+            self._log(" [bold cyan]/group create <name>[/bold cyan]   Create a new group (you become admin)")
+            self._log(" [bold cyan]/group info [id][/bold cyan]       Show details and policy of a group")
+            self._log(" [bold cyan]/group members [id][/bold cyan]    List members of a group")
+            self._log(" [bold cyan]/group admins [id][/bold cyan]     List administrators of a group")
+            self._log(" [bold cyan]/group join <id> [peer][/bold cyan] Send join request to active/named peer")
+            self._log(" [bold cyan]/group leave <id>[/bold cyan]       Leave group or request leave")
+            self._log(" [bold cyan]/group approve <id> <dev>[/bold cyan] (Admin) Approve pending join request")
+            self._log(" [bold cyan]/group reject <id> <dev>[/bold cyan]  (Admin) Reject pending join request")
+            self._log(" [bold cyan]/group revoke <id> <dev>[/bold cyan]  (Admin) Revoke member access")
+            self._log(" [bold cyan]/group addadmin <id> <dev>[/bold cyan] (Admin) Add an administrator")
+            self._log(" [bold cyan]/group policy <id> [k=v][/bold cyan] View or set group policy")
             self._log("[dim cyan]────────────────────────────────────────────────────────[/dim cyan]")
             self._log(" [bold cyan]/quit[/bold cyan] or [bold cyan]/exit[/bold cyan]          Exit application")
             self._log("[bold yellow]╚═══════════════════════ Shortcuts ══════════════════════╝[/bold yellow]")
@@ -1619,6 +2516,9 @@ class ChatApp(App):
 
         elif cmd == "/delete":
             await self._handle_delete_file(arg)
+
+        elif cmd in ("/groups", "/group"):
+            await self._handle_group_command(arg)
 
         elif cmd in ("/quit", "/exit", "/q"):
             self.exit()

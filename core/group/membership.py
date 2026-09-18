@@ -97,6 +97,35 @@ class MembershipCertificate:
     expires_at: Optional[float] = None  # None = never expires
     admin_device_id: str = ""
     signature: str = ""  # base64(64-byte Ed25519 signature by admin key)
+    status: str = "active"
+
+    def to_dict(self) -> dict:
+        return {
+            "device_id": self.device_id,
+            "device_public_key": self.device_public_key,
+            "group_id": self.group_id,
+            "role": self.role,
+            "permissions": list(self.permissions),
+            "issued_at": self.issued_at,
+            "expires_at": self.expires_at,
+            "admin_device_id": self.admin_device_id,
+            "signature": self.signature,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MembershipCertificate":
+        return cls(
+            device_id=data["device_id"],
+            device_public_key=data["device_public_key"],
+            group_id=data["group_id"],
+            role=data["role"],
+            permissions=list(data.get("permissions", [])),
+            issued_at=float(data["issued_at"]),
+            expires_at=data.get("expires_at"),
+            admin_device_id=data["admin_device_id"],
+            signature=data.get("signature", ""),
+            status=data.get("status", "active"),
+        )
 
 
 def issue_membership_certificate(

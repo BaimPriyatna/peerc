@@ -131,6 +131,7 @@ def _row_to_cert(row: sqlite3.Row) -> MembershipCertificate:
         expires_at=row["expires_at"],
         admin_device_id=row["admin_device_id"],
         signature=row["signature"],
+        status=row["status"] if "status" in row.keys() else "active",
     )
 
 
@@ -141,6 +142,9 @@ def _row_to_admin(row: sqlite3.Row) -> AdminRecord:
         public_key=row["public_key"],
         added_at=row["added_at"],
         added_by=row["added_by"],
+        status=AdminStatus(row["status"]) if "status" in row.keys() else AdminStatus.ACTIVE,
+        removed_at=row["removed_at"] if "removed_at" in row.keys() else None,
+        removed_by=row["removed_by"] if "removed_by" in row.keys() else None,
     )
 
 
@@ -564,6 +568,7 @@ class GroupStore:
             public_key=base64.b64encode(public_key).decode("ascii"),
             added_at=time.time(),
             added_by=added_by,
+            status=AdminStatus.ACTIVE,
         )
         self._require_conn().execute(
             "INSERT INTO group_admins (group_id, device_id, public_key, added_at, added_by, status) "
