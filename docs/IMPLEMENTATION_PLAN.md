@@ -1675,70 +1675,187 @@ Ini jauh lebih penting daripada sekadar membuat crypto kuat.
 
 ---
 
-## Phase 38 — Project structure final
+## Phase 38 — One-Shot Final Refactor
+
+*(Supersedes the original speculative structure below this note's commit —
+that early draft predates most of Phases 6-46 and no longer matches the
+actual repo layout. See "Why Phase 38 isn't done yet" in `ROADMAP.md` for
+why this phase is deliberately deferred until Phase 44-46 (`core/connectivity/`)
+also land, so the one-shot restructure below doesn't need a second pass.)*
+
+**Tujuan:** setelah refactor selesai, struktur langsung menjadi final dan
+seluruh legacy root module hanya menjadi compatibility shim.
+
+```text
+peerc/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── config.py
+│   └── ui/
+│       ├── __init__.py
+│       ├── app.py
+│       ├── widgets/
+│       └── modals/
+│
+├── core/
+│   ├── discovery/
+│   │   ├── broadcast.py
+│   │   ├── mdns.py
+│   │   ├── registry.py
+│   │   └── identity_loader.py
+│   ├── messaging/
+│   │   └── session.py
+│   ├── transport/
+│   │   └── manager.py
+│   ├── transfer/
+│   │   └── session.py
+│   └── ...existing core packages...
+│
+├── chat.py             # compatibility shim
+├── discovery.py        # compatibility shim
+├── file_transfer.py    # compatibility shim
+├── peer.py             # compatibility shim
+├── protocol.py         # compatibility shim
+└── ui.py               # compatibility shim
+```
+
+### Urutan pengerjaan sekali jalan
+
+1. **Backup/rollback point**
+   - `git tag pre-phase38-refactor`
+   - Tidak perlu staging/commit di tengah.
+
+2. **Transport**
+   - Pindahkan implementasi `ConnectionManager` dan dependency terkait ke `core/transport/manager.py`.
+   - `peer.py` menjadi shim.
+   - Semua internal import → `core.transport`.
+
+3. **Discovery**
+   - Pecah `discovery.py` menjadi:
+     - `broadcast.py`
+     - `mdns.py`
+     - `registry.py`
+     - `identity_loader.py`
+   - `discovery.py` hanya re-export.
+   - Semua internal import → `core.discovery`.
+
+4. **Messaging**
+   - `ChatSession` → `core/messaging/session.py`.
+   - `chat.py` → shim.
+   - Internal import → `core.messaging`.
+
+5. **File transfer**
+   - Implementasi canonical → `core/transfer/session.py`.
+   - `file_transfer.py` → shim.
+   - Internal import → `core.transfer`.
+
+6. **Protocol**
+   - **Tidak dipindahkan**, karena `core/protocol` sudah canonical.
+   - `protocol.py` → shim.
+   - Semua `import protocol` → `from core...`.
+
+7. **Application**
+   - Buat `app/main.py`.
+   - Buat `app/config.py`.
+   - Entry point aplikasi dipindahkan dari root `ui.py`.
+
+8. **UI**
+   - `PeercApp` → `app/ui/app.py`.
+   - Pisahkan widgets dan modals ke:
+     ```text
+     app/ui/widgets/
+     app/ui/modals/
+     ```
+   - `ui.py` akhirnya hanya compatibility shim.
+   - Jangan mengubah behavior UI selama refactor.
+
+9. **Import audit**
+   - Search seluruh repo untuk:
+     ```text
+     import peer
+     import discovery
+     import chat
+     import file_transfer
+     import protocol
+     import ui
+     ```
+   - Production code harus menggunakan `core.*` / `app.*`.
+   - Root module hanya boleh menjadi compatibility layer.
+
+10. **Compatibility**
+    - Tambahkan `tests/test_shims.py`.
+    - Pastikan:
+      ```python
+      from peer import ConnectionManager
+      from core.transport.manager import ConnectionManager as Canonical
+
+      assert ConnectionManager is Canonical
+      ```
+    - Lakukan hal yang sama untuk API legacy lainnya.
+
+11. **Packaging**
+    ```toml
+    [project.scripts]
+    peerc = "app.main:main"
+    pchat = "app.main:main"
+    ```
+    - `app/*` dan `core/*` masuk package.
+    - Root shim tetap ter-package sebagai `py-modules`.
+
+12. **Clean install**
+    - Build wheel.
+    - Buat venv baru.
+    - Install wheel, **bukan editable install**.
+    - Test:
+      ```bash
+      peerc --help
+      pchat --help
+      python -m app.main --help
+      ```
+    - Test legacy imports juga.
+
+13. **Final regression**
+    - Semua test.
+    - TUI.
+    - Discovery.
+    - Connection.
+    - Chat.
+    - File transfer.
+    - Security/auth.
+    - Packaging.
+
+14. **Dokumentasi**
+    - Update README agar arsitektur baru menjadi dokumentasi utama.
+    - Dokumentasikan `peerc` sebagai entry point.
+    - Legacy `ui.py`, `peer.py`, dll. disebut sebagai compatibility layer.
+
+### Aturan penting
+
+**Tidak ada functional redesign di Phase 38.**
+Hanya struktur/import/packaging.
 
 Target akhirnya:
 
+```text
+app  → application/UI
+core → canonical implementation
+root modules → compatibility only
 ```
-peerc/
-│
-├── app/
-│   ├── main.py
-│   └── config.py
-│
-├── core/
-│   ├── protocol/
-│   │   ├── frame.py
-│   │   ├── messages.py
-│   │   └── errors.py
-│   │
-│   ├── transport/
-│   │   ├── tcp.py
-│   │   ├── secure.py
-│   │   └── session.py
-│   │
-│   ├── crypto/
-│   │   ├── identity.py
-│   │   ├── handshake.py
-│   │   ├── key_exchange.py
-│   │   └── encryption.py
-│   │
-│   └── identity/
-│       ├── device.py
-│       └── keystore.py
-│
-├── discovery/
-│   ├── broadcast.py
-│   ├── mdns.py
-│   └── registry.py
-│
-├── trust/
-│   ├── store.py
-│   └── revocation.py
-│
-├── messaging/
-│   ├── chat.py
-│   └── ack.py
-│
-├── transfer/
-│   ├── manager.py
-│   ├── sender.py
-│   ├── receiver.py
-│   ├── chunk.py
-│   ├── resume.py
-│   └── hashing.py
-│
-├── storage/
-│   ├── database.py
-│   └── migrations.py
-│
-├── ui/
-│   └── textual_app.py
-│
-└── tests/
-    ├── unit/
-    ├── integration/
-    └── security/
+
+dan dependency harus satu arah:
+
+```text
+app ───────→ core
+  │
+  └────────→ core
+
+core ──────→ core
+
+root shims → app/core
+
+❌ core → root shims
+❌ app/core → legacy implementation
 ```
 
 ---
