@@ -327,6 +327,62 @@ def make_group_membership_revoke(
     }
 
 
+def make_group_export_request(
+    request_id: str,
+    group_id: str,
+    device_id: str,
+    device_public_key: str,
+    file_id: str,
+    signature: str,
+    action: str = "EXPORT",
+    reason: str | None = None,
+    timestamp: float | None = None,
+) -> dict:
+    return {
+        "type": "group_export_request",
+        "version": PROTOCOL_VERSION,
+        "request_id": request_id,
+        "group_id": group_id,
+        "device_id": device_id,
+        "device_public_key": device_public_key,
+        "file_id": file_id,
+        "action": action,
+        "reason": reason,
+        "timestamp": time.time() if timestamp is None else timestamp,
+        "signature": signature,
+    }
+
+
+def make_group_export_capability(
+    capability_id: str,
+    request_id: str,
+    group_id: str,
+    device_id: str,
+    file_id: str,
+    issued_at: float,
+    expires_at: float,
+    nonce: str,
+    admin_device_id: str,
+    signature: str,
+    action: str = "EXPORT",
+) -> dict:
+    return {
+        "type": "group_export_capability",
+        "version": PROTOCOL_VERSION,
+        "capability_id": capability_id,
+        "request_id": request_id,
+        "group_id": group_id,
+        "device_id": device_id,
+        "file_id": file_id,
+        "action": action,
+        "issued_at": issued_at,
+        "expires_at": expires_at,
+        "nonce": nonce,
+        "admin_device_id": admin_device_id,
+        "signature": signature,
+    }
+
+
 # ---- Schema validation --------------------------------------------------
 #
 # read_frame() only guarantees "valid JSON". It does NOT guarantee the
@@ -363,6 +419,15 @@ REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "group_membership_revoke": (
         "revocation_id", "group_id", "device_id", "revoked_by", "timestamp", "signature",
+    ),
+    "group_export_request": (
+        "request_id", "group_id", "device_id", "device_public_key",
+        "file_id", "timestamp", "signature",
+    ),
+    "group_export_capability": (
+        "capability_id", "request_id", "group_id", "device_id",
+        "file_id", "issued_at", "expires_at", "nonce", "admin_device_id",
+        "signature",
     ),
     "error": ("code", "message"),
 }
@@ -478,5 +543,21 @@ def validate_message(message) -> dict:
             val = message[field_name]
             if not isinstance(val, str) or not val:
                 raise ProtocolError(f"group_membership_revoke.{field_name} must be a non-empty string")
+
+    if msg_type == "group_export_request":
+        if not isinstance(message["device_public_key"], str) or not message["device_public_key"]:
+            raise ProtocolError("group_export_request.device_public_key must be a non-empty string")
+        if not isinstance(message["file_id"], str) or not message["file_id"]:
+            raise ProtocolError("group_export_request.file_id must be a non-empty string")
+
+    if msg_type == "group_export_capability":
+        for field_name in ("capability_id", "file_id", "nonce", "admin_device_id"):
+            val = message[field_name]
+            if not isinstance(val, str) or not val:
+                raise ProtocolError(f"group_export_capability.{field_name} must be a non-empty string")
+        for num_field in ("issued_at", "expires_at"):
+            val = message[num_field]
+            if not isinstance(val, (int, float)) or isinstance(val, bool):
+                raise ProtocolError(f"group_export_capability.{num_field} must be numeric")
 
     return message

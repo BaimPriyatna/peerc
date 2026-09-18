@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **1.16.4** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.17.0** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
@@ -8,9 +8,9 @@ the detailed design for Phase 39 specifically.
 Versioning policy: `a.b.c` — `c` (PATCH) is a small change/sub-step within
 the current phase; `b` (MINOR) identifies the phase itself and increments
 whenever work moves into a new phase (e.g. Phase 5's sub-steps landed as
-`1.13.0`–`1.13.1`; Phase 26 landed as `1.14.0`); `a` (MAJOR) is bumped
-only once the whole project is finished — `2.x` marks the shift from active
-development into maintenance/updates, not before.
+`1.13.0`–`1.13.1`; Phase 26 landed as `1.14.0`; Phase 43 landed as `1.17.0`);
+`a` (MAJOR) is bumped only once the whole project is finished — `2.x` marks
+the shift from active development into maintenance/updates, not before.
 
 ## Done
 
@@ -47,20 +47,21 @@ development into maintenance/updates, not before.
 | `1.16.3` | 42.3 | `core/group/admin.py` [NEW]: `AdminRecord`, `ThresholdApproval` — k-of-n signature collection for any admin-gated action, Ed25519-signed (§14 Multiple Administrators, `SECURITY_MODEL.md` §22); storage-agnostic (`count_valid_signatures`/`is_approved` take the caller's current active-admin set, so a since-removed admin's signature silently stops counting). `store.py` gains `group_admins` table + `add_admin`/`remove_admin` (refuses removing the last active admin)/`list_admins`/`get_active_admin_public_keys`; `create_group()` now auto-registers the founder as the first active admin; `record_membership()`/`set_policy()` now accept a signature from ANY currently-active admin, not just the founder |
 | `1.16.4` | 42.4 | `core/group/protocol.py` [NEW]: signed Join/Leave/Revoke control-plane payloads (`GroupJoinRequest`/`GroupJoinResponse`, `GroupLeaveRequest`/`GroupLeaveResponse`, `MembershipRevocation`) with domain-separated Ed25519 signatures and join self-consistency checks (`device_id == sha256(public_key)`); `core/protocol/messages.py` gains wire factories/validation for `group_join_request`, `group_join_response`, `group_leave_request`, `group_leave_response`, `group_membership_revoke`; `GroupStore` gains `process_join_response`/`process_leave_request`/`process_leave_response`/`record_revocation` + tombstone metadata accessor; vault schema now includes `group_admins`. UI commands and signed audit log still deferred |
 | `1.16.5` | 42.5 | `core/group/audit.py` [NEW]: signed audit log (`sign_audit_event`/`verify_audit_event`/`create_group_audit_event`/`verify_group_audit_event`/`format_audit_event`) extending Phase 41's `SecurityEvent` with admin Ed25519 signatures; `GroupStore` gains `group_audit_log` table, `record_audit_event`/`list_audit_events`/`get_audit_event`, and automatic lifecycle audit recording (`create_group`, `record_membership`, `revoke_membership`, `set_policy`, `add_admin`, `remove_admin`); vault schema updated; `ui.py` gains `/group audit` command. Completes Phase 42 (Group Authority System) |
+| `1.17.0` | 43 | `core/group/export_auth.py` [NEW]: short-lived admin-signed `ExportCapability` & device `ExportRequest` (`GROUP_AUTHORITY_DESIGN.md` §11/§12); `PolicyEnforcer.check_export()` upgraded to Phase 43 AND-gate; `GroupStore` gains `export_capabilities` table + CRUD (`store_capability`, `get_valid_capability`, `mark_capability_used` one-shot burn, `list_capabilities`, `purge_expired_capabilities`); `core/vault/file_actions.py`'s `export_secure_file()` integrates group capability gate before personal critical-action key gate; `core/vault/database.py` schema updated; wire messages `group_export_request`/`group_export_capability` with schema validation; `ui.py` gains `/group req-export`, `/group authorize-export`, and `/group caps` commands + network callbacks. Completes Phase 43 |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
 (Session Keys), Phase 8 (ChaCha20-Poly1305 Encryption), Phase 9
 (Secure Transport Layer), Phase 12–20 (File Transfer V2 + Hardening),
 Phase 26 (Event Architecture), Phase 39 (Secure Storage), Phase 40
-(Device Key Rotation), Phase 41 (Security Event Logging), and Phase 42
-(Group Authority System) are complete.**
+(Device Key Rotation), Phase 41 (Security Event Logging), Phase 42
+(Group Authority System), and Phase 43 (Group-Gated Export Authorization)
+are complete.**
 
 ## Designed, not yet coded
 
 | Phase | What | Where |
 |---|---|---|
-| 43 | Group-Gated Export Authorization (admin capability AND personal critical-action key, not either/or) | `GROUP_AUTHORITY_DESIGN.md` §Export Authorization |
 | 44 | Internet P2P Connectivity (Identity/Locator separation, signed Endpoint Update) | `INTERNET_CONNECTIVITY_DESIGN.md` |
 | 45 | Rendezvous Service (optional, endpoint discovery only, never a data path) | `INTERNET_CONNECTIVITY_DESIGN.md` §Rendezvous |
 | 46 | NAT Traversal & Relay Fallback (optional, relay only sees ciphertext) | `INTERNET_CONNECTIVITY_DESIGN.md` §Optional Relay |
@@ -81,8 +82,8 @@ disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
 1. **Phase 42 — Group Authority System** (complete: 42.1 landed as `1.16.0`; 42.2 landed as `1.16.1`; 42.3 landed as `1.16.3`; 42.4 landed as `1.16.4`; 42.5 landed as `1.16.5`)
-2. **Phase 43 — Group-Gated Export Authorization** (design-complete, depends on 39+42) ← next
-3. **Phase 44 — Internet P2P Connectivity** (design-complete)
+2. **Phase 43 — Group-Gated Export Authorization** (complete: landed as `1.17.0`)
+3. **Phase 44 — Internet P2P Connectivity** (design-complete) ← next
 4. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
 5. Phase 36/37 — UI/security UX
 6. Phase 28-35 — logging, performance, concurrency, state machines,
@@ -96,20 +97,10 @@ numeric phase order in the plan doc:
 `IMPLEMENTATION_PLAN.md`'s Phase 38 target structure (`app/`,
 `core/transport/`, `core/crypto/`, etc.) is now much closer than it was
 — `core/transport/secure.py` and `core/crypto/handshake.py` both exist
-today (Phase 6-9 landed). What's still missing is the newer Phase 40-46
-scope: `core/identity/rotation.py`, `core/security/events.py`,
-`core/group/`, `core/connectivity/` don't exist yet, since those phases
-are still design-only. Restructuring into the final Phase 38 shape now
-would still mean creating placeholder directories for that not-yet-built
-code. What's already done matches Phase 38 exactly and needs no rework
-later: `core/{protocol,identity,trust,crypto,transport,transfer}` are
-all in their final destinations; `tests/` was split out; CI
+today (Phase 6-9 landed). What's still missing from the newer Phase 40-46
+scope is `core/connectivity/` (Phase 44-46, design-complete). What's
+already done matches Phase 38 exactly and needs no rework later:
+`core/{protocol,identity,trust,crypto,transport,transfer,vault,security,group}`
+are all in their final destinations; `tests/` was split out; CI
 (`.github/workflows/tests.yml`) runs the full suite on every push.
 
-## How this file stays honest
-
-Update this table whenever a version is tagged in `CHANGELOG.md` — same
-commit, so this file and the changelog never drift apart the way
-`IMPLEMENTATION_PLAN.md`'s "Urutan implementasi" and "Prioritas versi"
-sections had (both had stale ✅/⏳ marks from before this file existed;
-fixed alongside adding this one).

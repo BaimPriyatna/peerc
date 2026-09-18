@@ -361,10 +361,32 @@ class PolicyEnforcer:
 
     # ---- 2. Export Authorization (§5, §11) --------------------------------
 
-    def check_export(self, group_id: Optional[str] = None) -> None:
+    def check_export(
+        self,
+        group_id: Optional[str] = None,
+        device_id: Optional[str] = None,
+        file_id: Optional[str] = None,
+        active_admin_keys: Optional[list] = None,
+    ) -> None:
         """Verify whether export from secure storage is permitted by group policy.
 
-        Raises ExportDeniedError and emits POLICY_VIOLATION if export is denied.
+        Phase 43 AND-gate behaviour (GROUP_AUTHORITY_DESIGN.md §11):
+          - If no group has allow_export=False  → pass through.
+          - If a group restricts export AND device_id/file_id are supplied:
+              look up a valid ExportCapability; if found+verified → pass.
+              If absent/expired/invalid → raise ExportDeniedError (fail-closed).
+          - If device_id/file_id NOT provided → raise ExportDeniedError
+            (old strict behaviour — safe fallback for callers without Phase 43
+            context).
+
+        Emits POLICY_VIOLATION on every denial.
+
+        Args:
+            group_id:          Restrict check to a single group (None = all).
+            device_id:         Requesting device (required for capability lookup).
+            file_id:           Target file's secure_id (required for capability lookup).
+            active_admin_keys: List of base64-encoded active admin public keys.
+                               When None and group_store is set, fetched automatically.
         """
         if self.group_store is None:
             return
@@ -378,29 +400,95 @@ class PolicyEnforcer:
             if group is None:
                 continue
             policy = self.group_store.get_policy(group.group_id)
-            if policy is not None and not policy.allow_export:
-                emit(
-                    SecurityEvent(
-                        event_type=SecurityEventType.POLICY_VIOLATION,
-                        severity=SecuritySeverity.HIGH,
-                        description=(
-                            f"export denied: group {group.group_id} ({group.name}) enforces allow_export=False"
-                        ),
-                        details={
-                            "group_id": group.group_id,
-                            "group_name": group.name,
-                            "policy": "allow_export",
-                            "action": "export",
-                        },
-                    )
-                )
-                raise ExportDeniedError(
-                    f"export denied: group {group.group_id!r} ({group.name}) enforces allow_export=False"
-                )
+            if policy is None or policy.allow_export:
+                continue  # this group does not restrict export
 
-    def is_export_allowed(self, group_id: Optional[str] = None) -> bool:
+            # Group restricts export.  Check for a valid capability first.
+            cap = None
+            if device_id is not None and file_id is not None:
+                cap = self.group_store.get_valid_capability(
+                    group.group_id, device_id, file_id
+                )
+                if cap is not None:
+                    # Verify admin signature using the group's active admin keys
+                    if active_admin_keys is None:
+                        active_admin_keys = list(
+                            self.group_store.get_active_admin_public_keys(group.group_id).values()
+                        )
+                        # get_active_admin_public_keys returns {device_id: bytes}, but
+                        # verify_export_capability expects base64 strings.
+                        import base64
+                        active_admin_keys = [
+                            base64.b64encode(k).decode("ascii")
+                            if isinstance(k, (bytes, bytearray))
+                            else k
+                            for k in active_admin_keys
+                        ]
+                    from .export_auth import verify_export_capability
+                    if verify_export_capability(cap, active_admin_keys):
+                        # Capability is valid — burn it (one-shot) and allow.
+                        self.group_store.mark_capability_used(cap.capability_id)
+                        emit(
+                            SecurityEvent(
+                                event_type=SecurityEventType.POLICY_CHANGED,
+                                severity=SecuritySeverity.INFO,
+                                description=(
+                                    f"export authorized by capability {cap.capability_id} "
+                                    f"for device {device_id} file {file_id} "
+                                    f"in group {group.group_id} ({group.name})"
+                                ),
+                                device_id=device_id,
+                                details={
+                                    "group_id": group.group_id,
+                                    "capability_id": cap.capability_id,
+                                    "admin_device_id": cap.admin_device_id,
+                                    "file_id": file_id,
+                                },
+                            )
+                        )
+                        continue  # this group's gate passed — check next group
+                    # Capability found but signature invalid (tampered/wrong admin)
+                    cap = None  # fall through to denial
+
+            # No valid capability or args not provided → deny (fail-closed)
+            emit(
+                SecurityEvent(
+                    event_type=SecurityEventType.POLICY_VIOLATION,
+                    severity=SecuritySeverity.HIGH,
+                    description=(
+                        f"export denied: group {group.group_id} ({group.name}) enforces "
+                        f"allow_export=False and no valid admin capability was present"
+                        + (f" for device {device_id} file {file_id}" if device_id else "")
+                    ),
+                    device_id=device_id,
+                    details={
+                        "group_id": group.group_id,
+                        "group_name": group.name,
+                        "policy": "allow_export",
+                        "action": "export",
+                        "has_capability": cap is not None,
+                    },
+                )
+            )
+            raise ExportDeniedError(
+                f"export denied: group {group.group_id!r} ({group.name}) enforces "
+                "allow_export=False — obtain a valid admin Export Authorization first"
+            )
+
+    def is_export_allowed(
+        self,
+        group_id: Optional[str] = None,
+        device_id: Optional[str] = None,
+        file_id: Optional[str] = None,
+        active_admin_keys: Optional[list] = None,
+    ) -> bool:
         try:
-            self.check_export(group_id=group_id)
+            self.check_export(
+                group_id=group_id,
+                device_id=device_id,
+                file_id=file_id,
+                active_admin_keys=active_admin_keys,
+            )
             return True
         except ExportDeniedError:
             return False

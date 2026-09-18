@@ -1,4 +1,4 @@
-"""core/group/store.py — Phase 42.1: SQLite-backed group/membership storage.
+"""core/group/store.py — Phase 42.1/43: SQLite-backed group/membership/export-auth storage.
 
 Mirrors core/trust/store.py's shape: default to opening/owning its own
 db_path file, but accept an already-open connection to share instead
@@ -24,6 +24,7 @@ import uuid
 from core.security.events import SecurityEvent, SecurityEventType, SecuritySeverity, emit
 from .admin import AdminRecord
 from .audit import create_group_audit_event, verify_group_audit_event
+from .export_auth import ExportCapability, verify_export_capability
 from .membership import Group, MembershipCertificate, verify_membership_certificate
 from .policy import CommunicationRule, GroupPolicy, LeaveRequiresAdminError, PolicyEffect
 from .protocol import (
@@ -98,6 +99,21 @@ CREATE TABLE IF NOT EXISTS group_audit_log (
     details          TEXT NOT NULL,
     signature        TEXT,
     signer_device_id TEXT
+);
+CREATE TABLE IF NOT EXISTS export_capabilities (
+    capability_id   TEXT PRIMARY KEY,
+    request_id      TEXT NOT NULL,
+    group_id        TEXT NOT NULL,
+    device_id       TEXT NOT NULL,
+    file_id         TEXT NOT NULL,
+    action          TEXT NOT NULL DEFAULT 'EXPORT',
+    issued_at       REAL NOT NULL,
+    expires_at      REAL NOT NULL,
+    nonce           TEXT NOT NULL,
+    admin_device_id TEXT NOT NULL,
+    signature       TEXT NOT NULL,
+    used            INTEGER NOT NULL DEFAULT 0,
+    used_at         REAL
 );
 """
 
@@ -190,6 +206,22 @@ def _row_to_policy(row: sqlite3.Row) -> GroupPolicy:
         default_communication_effect=PolicyEffect(row["default_communication_effect"]),
         version=row["version"],
         updated_at=row["updated_at"],
+        admin_device_id=row["admin_device_id"],
+        signature=row["signature"],
+    )
+
+
+def _row_to_capability(row: sqlite3.Row) -> ExportCapability:
+    return ExportCapability(
+        capability_id=row["capability_id"],
+        request_id=row["request_id"],
+        group_id=row["group_id"],
+        device_id=row["device_id"],
+        file_id=row["file_id"],
+        action=row["action"],
+        issued_at=float(row["issued_at"]),
+        expires_at=float(row["expires_at"]),
+        nonce=row["nonce"],
         admin_device_id=row["admin_device_id"],
         signature=row["signature"],
     )
@@ -827,3 +859,102 @@ class GroupStore:
             (event_id,),
         ).fetchone()
         return _row_to_audit_event(row) if row else None
+
+    # ---- Phase 43: Export Capability CRUD ---------------------------------
+
+    def store_capability(self, cap: ExportCapability) -> None:
+        """Persist a received or issued ExportCapability.
+
+        Verifies the admin signature against this group's current active
+        admins before storing.  Refuses to store an already-expired
+        capability or one with an unverifiable signature.
+        """
+        if cap.is_expired():
+            raise GroupStoreError(
+                f"cannot store an already-expired capability {cap.capability_id!r}"
+            )
+        active_keys = [
+            a.public_key for a in self.list_admins(cap.group_id, status=AdminStatus.ACTIVE)
+        ]
+        if not verify_export_capability(cap, active_keys):
+            raise GroupStoreError(
+                f"cannot store capability {cap.capability_id!r}: signature unverifiable "
+                f"against active admins of group {cap.group_id!r}"
+            )
+        self._require_conn().execute(
+            "INSERT OR REPLACE INTO export_capabilities "
+            "(capability_id, request_id, group_id, device_id, file_id, action, "
+            " issued_at, expires_at, nonce, admin_device_id, signature, used, used_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)",
+            (
+                cap.capability_id, cap.request_id, cap.group_id, cap.device_id,
+                cap.file_id, cap.action, cap.issued_at, cap.expires_at,
+                cap.nonce, cap.admin_device_id or "", cap.signature or "",
+            ),
+        )
+        self._require_conn().commit()
+
+    def get_valid_capability(
+        self,
+        group_id: str,
+        device_id: str,
+        file_id: str,
+    ) -> Optional[ExportCapability]:
+        """Return the newest unexpired, unused capability for (device, file, group).
+
+        A wildcard capability (file_id='*') also matches any specific file_id.
+        Returns None when no valid capability exists.
+        """
+        now = time.time()
+        rows = self._require_conn().execute(
+            "SELECT * FROM export_capabilities "
+            "WHERE group_id = ? AND device_id = ? AND used = 0 AND expires_at > ? "
+            "  AND (file_id = ? OR file_id = '*') "
+            "ORDER BY expires_at DESC LIMIT 1",
+            (group_id, device_id, now, file_id),
+        ).fetchall()
+        if not rows:
+            return None
+        return _row_to_capability(rows[0])
+
+    def mark_capability_used(self, capability_id: str) -> None:
+        """One-shot burn: mark a capability as used so it cannot be reused."""
+        self._require_conn().execute(
+            "UPDATE export_capabilities SET used = 1, used_at = ? WHERE capability_id = ?",
+            (time.time(), capability_id),
+        )
+        self._require_conn().commit()
+
+    def list_capabilities(
+        self,
+        group_id: str,
+        device_id: Optional[str] = None,
+        include_expired: bool = False,
+        include_used: bool = False,
+    ) -> List[ExportCapability]:
+        """List capabilities for *group_id*, optionally filtered by device.
+
+        By default returns only valid (unexpired, unused) capabilities.
+        """
+        query = "SELECT * FROM export_capabilities WHERE group_id = ?"
+        params: List[Any] = [group_id]
+        if device_id is not None:
+            query += " AND device_id = ?"
+            params.append(device_id)
+        if not include_expired:
+            query += " AND expires_at > ?"
+            params.append(time.time())
+        if not include_used:
+            query += " AND used = 0"
+        query += " ORDER BY issued_at DESC"
+        rows = self._require_conn().execute(query, tuple(params)).fetchall()
+        return [_row_to_capability(r) for r in rows]
+
+    def purge_expired_capabilities(self) -> int:
+        """Delete all expired or used capabilities. Returns count deleted."""
+        cur = self._require_conn().execute(
+            "DELETE FROM export_capabilities WHERE expires_at <= ? OR used = 1",
+            (time.time(),),
+        )
+        self._require_conn().commit()
+        return cur.rowcount

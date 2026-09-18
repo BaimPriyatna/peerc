@@ -153,6 +153,21 @@ CREATE TABLE IF NOT EXISTS group_audit_log (
     signature        TEXT,
     signer_device_id TEXT
 );
+CREATE TABLE IF NOT EXISTS export_capabilities (
+    capability_id   TEXT PRIMARY KEY,
+    request_id      TEXT NOT NULL,
+    group_id        TEXT NOT NULL,
+    device_id       TEXT NOT NULL,
+    file_id         TEXT NOT NULL,
+    action          TEXT NOT NULL DEFAULT 'EXPORT',
+    issued_at       REAL NOT NULL,
+    expires_at      REAL NOT NULL,
+    nonce           TEXT NOT NULL,
+    admin_device_id TEXT NOT NULL,
+    signature       TEXT NOT NULL,
+    used            INTEGER NOT NULL DEFAULT 0,
+    used_at         REAL
+);
 """
 
 

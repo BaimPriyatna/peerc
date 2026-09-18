@@ -35,6 +35,7 @@ Cursor & Mouse:
 import asyncio
 import base64
 import os
+import secrets
 import shutil
 import subprocess
 import time
@@ -69,13 +70,21 @@ from core.trust.store import DEFAULT_DB_PATH as TRUST_DB_LEGACY_PATH
 from core.trust.store import TrustStore
 from core.group import (
     AdminStatus,
+    DEFAULT_CAPABILITY_TTL,
+    ExportCapability,
+    ExportRequest,
     Group,
     GroupPolicy,
     GroupStore,
     MembershipCertificate,
     MembershipStatus,
+    PolicyEnforcer,
+    create_export_request,
     create_group,
+    issue_export_capability,
     issue_membership_certificate,
+    verify_export_capability,
+    verify_export_request,
     verify_group_audit_event,
 )
 from core.group.protocol import (
@@ -552,6 +561,10 @@ class ChatApp(App):
         self._pending_join_requests: dict[str, tuple[str, GroupJoinRequest]] = {}
         self._pending_leave_requests: dict[str, tuple[str, GroupLeaveRequest]] = {}
 
+        # Phase 43: Group-Gated Export Authorization
+        self.policy_enforcer: Optional[PolicyEnforcer] = None
+        self._pending_export_requests: dict[str, tuple[str, ExportRequest]] = {}
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="main"):
@@ -622,6 +635,9 @@ class ChatApp(App):
 
         # Phase 42.2: wire group_store into trust_store for External Trust Restriction (§6)
         self.trust_store.set_group_store(self.group_store)
+
+        # Phase 43: PolicyEnforcer for group-gated export authorization
+        self.policy_enforcer = PolicyEnforcer(self.group_store)
 
         self.manager = ConnectionManager(
             listen_port=UI_TCP_PORT,
@@ -979,6 +995,8 @@ class ChatApp(App):
                 session=self.vault_session,
                 keyfile=keyfile,
                 critical_secret=None,  # already authorized above
+                policy_enforcer=self.policy_enforcer or (PolicyEnforcer(self.group_store) if self.group_store else None),
+                device_id=self.peer_id,
             )
             
             self._log(f"[green]✓ Exported {metadata.original_filename} → {destination}[/green]")
@@ -1131,6 +1149,12 @@ class ChatApp(App):
             await self._handle_group_policy(rest, extra)
         elif subcmd == "audit":
             await self._handle_group_audit(rest, extra)
+        elif subcmd in ("authorize-export", "auth-export"):
+            await self._handle_group_authorize_export(rest, extra)
+        elif subcmd == "req-export":
+            await self._handle_group_req_export(rest, extra)
+        elif subcmd in ("caps", "capabilities"):
+            await self._handle_group_caps(rest, extra)
         else:
             self._log(f"[yellow]Unknown group subcommand: '{subcmd}'. Type /help for usage.[/yellow]")
 
@@ -1827,6 +1851,179 @@ class ChatApp(App):
         except Exception as e:
             self._log(f"[red]Failed to set policy: {e}[/red]")
 
+    async def _handle_group_authorize_export(self, group_id: str, extra: str) -> None:
+        if not group_id or not extra.strip():
+            self._log("[yellow]Usage: /group authorize-export <group_id> <device_id> [file_id] [ttl_seconds][/yellow]")
+            return
+
+        if not self.group_store.is_admin(group_id, self.peer_id):
+            self._log(f"[red]You must be an administrator of group '{group_id}' to authorize export.[/red]")
+            return
+
+        parts = extra.strip().split()
+        device_arg = parts[0]
+        file_arg = parts[1] if len(parts) > 1 else "*"
+        ttl_arg = float(parts[2]) if len(parts) > 2 and parts[2].isdigit() else DEFAULT_CAPABILITY_TTL
+
+        # Check if there's a matching pending request
+        pending_entry = None
+        match_key = None
+        for k, (ak, r) in self._pending_export_requests.items():
+            if r.group_id == group_id and (r.device_id.startswith(device_arg) or r.request_id.startswith(device_arg)):
+                pending_entry = (ak, r)
+                match_key = k
+                break
+
+        if pending_entry is not None:
+            addr_key, req = pending_entry
+            target_device_id = req.device_id
+            target_file_id = req.file_id
+            cap = issue_export_capability(self.my_identity, self.peer_id, req, ttl=ttl_arg)
+        else:
+            cert = self.group_store.get_membership(group_id, device_arg)
+            if cert:
+                target_device_id = cert.device_id
+                pub_b64 = cert.device_public_key
+            else:
+                peer = self.registry.get(device_arg) or next(
+                    (p for p in self.registry.list_peers() if p.peer_id.startswith(device_arg)),
+                    None,
+                )
+                if peer and peer.public_key:
+                    target_device_id = peer.peer_id
+                    pub_b64 = base64.b64encode(peer.public_key).decode("ascii")
+                else:
+                    self._log(f"[red]Could not resolve device '{device_arg}' in group '{group_id}'.[/red]")
+                    return
+
+            target_file_id = file_arg
+            dummy_req = ExportRequest(
+                request_id=secrets.token_hex(16),
+                device_id=target_device_id,
+                device_public_key=pub_b64,
+                group_id=group_id,
+                file_id=target_file_id,
+            )
+            cap = issue_export_capability(self.my_identity, self.peer_id, dummy_req, ttl=ttl_arg)
+            peer_obj = self.registry.get(target_device_id)
+            addr_key = f"{peer_obj.ip}:{peer_obj.tcp_port}" if peer_obj else None
+
+        try:
+            self.group_store.store_capability(cap)
+        except Exception as e:
+            self._log(f"[red]Failed to store capability: {e}[/red]")
+            return
+
+        if match_key:
+            self._pending_export_requests.pop(match_key, None)
+
+        if addr_key and self.manager:
+            wire = protocol.make_group_export_capability(
+                capability_id=cap.capability_id,
+                request_id=cap.request_id,
+                group_id=cap.group_id,
+                device_id=cap.device_id,
+                file_id=cap.file_id,
+                action=cap.action,
+                issued_at=cap.issued_at,
+                expires_at=cap.expires_at,
+                nonce=cap.nonce,
+                admin_device_id=cap.admin_device_id,
+                signature=cap.signature,
+            )
+            try:
+                await self.manager.send(addr_key, wire)
+            except Exception as e:
+                self._log(f"[yellow]Capability stored, but failed to send to peer: {e}[/yellow]")
+
+        self._log(
+            f"[green]✓ Authorized export of file '{target_file_id}' for {target_device_id[:8]} "
+            f"in group '{group_id}' (valid for {int(ttl_arg)}s).[/green]"
+        )
+
+    async def _handle_group_req_export(self, group_id: str, extra: str) -> None:
+        if not group_id or not extra.strip():
+            self._log("[yellow]Usage: /group req-export <group_id> <file_id> [reason][/yellow]")
+            return
+
+        cert = self.group_store.get_membership(group_id, self.peer_id)
+        if cert is None and not self.group_store.is_admin(group_id, self.peer_id):
+            self._log(f"[red]You are not a member of group '{group_id}'.[/red]")
+            return
+
+        parts = extra.strip().split(maxsplit=1)
+        file_id = parts[0]
+        reason = parts[1] if len(parts) > 1 else None
+
+        pub_b64 = base64.b64encode(self.public_key_bytes).decode("ascii")
+        req = create_export_request(
+            self.my_identity,
+            device_id=self.peer_id,
+            device_public_key_b64=pub_b64,
+            group_id=group_id,
+            file_id=file_id,
+            reason=reason,
+        )
+
+        wire = protocol.make_group_export_request(
+            request_id=req.request_id,
+            group_id=req.group_id,
+            device_id=req.device_id,
+            device_public_key=req.device_public_key,
+            file_id=req.file_id,
+            signature=req.signature,
+            action=req.action,
+            reason=req.reason,
+            timestamp=req.timestamp,
+        )
+
+        admins = self.group_store.list_admins(group_id, status=AdminStatus.ACTIVE)
+        sent_any = False
+        if self.manager:
+            for adm in admins:
+                if adm.device_id == self.peer_id:
+                    continue
+                peer = self.registry.get(adm.device_id)
+                if peer:
+                    try:
+                        await self.manager.send(f"{peer.ip}:{peer.tcp_port}", wire)
+                        sent_any = True
+                    except Exception:
+                        pass
+
+        if sent_any:
+            self._log(f"[green]✓ Sent export request for file '{file_id}' to active admin(s) in group '{group_id}'.[/green]")
+        else:
+            self._log(f"[yellow]Export request created (ID: {req.request_id[:8]}), but no connected group admins were found online.[/yellow]")
+
+    async def _handle_group_caps(self, group_id: str, extra: str) -> None:
+        if not group_id:
+            groups = self.group_store.list_groups()
+            if len(groups) == 1:
+                group_id = groups[0].group_id
+            else:
+                self._log("[yellow]Usage: /group caps <group_id> [device_id][/yellow]")
+                return
+
+        group = self.group_store.get_group(group_id)
+        if group is None:
+            self._log(f"[red]Group '{group_id}' not found.[/red]")
+            return
+
+        target_dev = extra.strip() or None
+        caps = self.group_store.list_capabilities(group_id, device_id=target_dev)
+        self._log(f"[bold yellow]╔════════════ Active Export Capabilities: {group.name} ({len(caps)}) ════════════╗[/bold yellow]")
+        if not caps:
+            self._log("  [dim]No unexpired, unused export capabilities found.[/dim]")
+        for c in caps:
+            rem = max(0, int(c.expires_at - time.time()))
+            admin_str = f"by {c.admin_device_id[:8]}" if c.admin_device_id else "admin"
+            self._log(
+                f"  • [bold cyan]{c.capability_id[:12]}[/bold cyan] → file: [bold]{c.file_id}[/bold] "
+                f"| device: {c.device_id[:8]} ({admin_str}) [green]{rem}s left[/green]"
+            )
+        self._log("[bold yellow]╚══════════════════════════════════════════════════════════════════╝[/bold yellow]")
+
     async def _on_group_join_request(self, addr_key: str, message: dict) -> None:
         if self.group_store is None or self.my_identity is None:
             return
@@ -1975,6 +2172,59 @@ class ChatApp(App):
         except Exception as e:
             self._log(f"[red]Failed to record revocation: {e}[/red]")
 
+    async def _on_group_export_request(self, addr_key: str, message: dict) -> None:
+        if self.group_store is None or self.my_identity is None:
+            return
+        try:
+            req = ExportRequest.from_dict(message)
+        except Exception as e:
+            self._log(f"[dim]Ignored invalid group_export_request: {e}[/dim]")
+            return
+        if not verify_export_request(req):
+            self._log(f"[red][bold]SECURITY:[/bold] Invalid signature on export request from {req.device_id[:8]}[/red]")
+            return
+
+        if not self.group_store.is_admin(req.group_id, self.peer_id):
+            return
+
+        key = f"{req.group_id}:{req.device_id}:{req.file_id}"
+        self._pending_export_requests[key] = (addr_key, req)
+
+        group = self.group_store.get_group(req.group_id)
+        group_name = group.name if group else req.group_id
+        peer = self.registry.get(req.device_id)
+        sender_name = peer.name if peer else req.device_id[:8]
+
+        self._log(f"[bold yellow]╔════════════ Group Export Request: {req.device_id[:8]} ════════════╗[/bold yellow]")
+        self._log(f"  [bold]From:[/bold]   {sender_name} ({req.device_id[:8]})")
+        self._log(f"  [bold]Group:[/bold]  {group_name} ({req.group_id})")
+        self._log(f"  [bold]File:[/bold]   {req.file_id}")
+        if req.reason:
+            self._log(f"  [bold]Reason:[/bold] {rich_escape(req.reason)}")
+        self._log(
+            f"  [bold]Action:[/bold] [bold cyan]/group authorize-export {req.group_id} {req.device_id[:8]} {req.file_id}[/bold cyan]"
+        )
+        self._log("[bold yellow]╚══════════════════════════════════════════════════════════╝[/bold yellow]")
+
+    async def _on_group_export_capability(self, addr_key: str, message: dict) -> None:
+        if self.group_store is None:
+            return
+        try:
+            cap = ExportCapability.from_dict(message)
+        except Exception as e:
+            self._log(f"[dim]Ignored invalid group_export_capability: {e}[/dim]")
+            return
+
+        try:
+            self.group_store.store_capability(cap)
+            rem = max(0, int(cap.expires_at - time.time()))
+            self._log(
+                f"[green]✓ Received Export Authorization for file [bold]{cap.file_id}[/bold] "
+                f"in group '{cap.group_id}' (expires in {rem}s).[/green]"
+            )
+        except Exception as e:
+            self._log(f"[red]Failed to store received export capability: {e}[/red]")
+
 
     def _perform_hard_lock(self) -> None:
         """Detach dependents, wipe DEK, flush+destroy the working copy.
@@ -1985,6 +2235,7 @@ class ChatApp(App):
             self.trust_store.adopt_conn(None)
         if self.group_store is not None:
             self.group_store.adopt_conn(None)
+        self.policy_enforcer = None
         if self.vault_session is not None and self.vault_session.is_unlocked:
             self.vault_session.lock()
         self.vault_db = None
@@ -2029,6 +2280,7 @@ class ChatApp(App):
                 self.trust_store.adopt_conn(self.vault_db.conn)
             if self.group_store is not None:
                 self.group_store.adopt_conn(self.vault_db.conn)
+                self.policy_enforcer = PolicyEnforcer(self.group_store)
             if self.trust_store is not None and self.group_store is not None:
                 self.trust_store.set_group_store(self.group_store)
             if self.vault_persistence is not None:
@@ -2131,6 +2383,10 @@ class ChatApp(App):
             await self._on_group_leave_response(addr_key, evt.message)
         elif msg_type == "group_membership_revoke":
             await self._on_group_membership_revoke(addr_key, evt.message)
+        elif msg_type == "group_export_request":
+            await self._on_group_export_request(addr_key, evt.message)
+        elif msg_type == "group_export_capability":
+            await self._on_group_export_capability(addr_key, evt.message)
 
     def _verify_self_reported_id(self, addr_key: str, claimed_peer_id: str) -> bool:
         """BUG-005: hello/hello_ack/chat messages carry a self-reported
@@ -2330,6 +2586,9 @@ class ChatApp(App):
             self._log(" [bold cyan]/group addadmin <id> <dev>[/bold cyan] (Admin) Add an administrator")
             self._log(" [bold cyan]/group policy <id> [k=v][/bold cyan] View or set group policy")
             self._log(" [bold cyan]/group audit <id> [limit][/bold cyan] (Admin) View signed audit log")
+            self._log(" [bold cyan]/group req-export <id> <fid>[/bold cyan] Request admin authorization to export file")
+            self._log(" [bold cyan]/group authorize-export <id> <dev>[/bold cyan] (Admin) Authorize device file export")
+            self._log(" [bold cyan]/group caps [id][/bold cyan]         List active export capabilities")
             self._log("[dim cyan]────────────────────────────────────────────────────────[/dim cyan]")
             self._log(" [bold cyan]/quit[/bold cyan] or [bold cyan]/exit[/bold cyan]          Exit application")
             self._log("[bold yellow]╚═══════════════════════ Shortcuts ══════════════════════╝[/bold yellow]")

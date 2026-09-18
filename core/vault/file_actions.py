@@ -136,13 +136,18 @@ def export_secure_file(
     session: VaultSession,
     keyfile,
     critical_secret: Optional[str] = None,
+    policy_enforcer=None,
+    group_id: Optional[str] = None,
+    device_id: Optional[str] = None,
+    active_admin_keys: Optional[list] = None,
 ) -> SecureFileMetadata:
     """Decrypt a secure file to a permanent plaintext location (§8).
-    
+
     This is the one irreversible action — plaintext leaves secure storage.
-    Requires explicit authorization via authorize_export() which gates on
-    both the unlocked session and the optional critical-action key (§11.7).
-    
+    Phase 43 (Group-Gated Export Authorization) adds a group capability gate
+    BEFORE the personal session gate.  Both must pass when a policy_enforcer
+    is provided and the device belongs to a group with allow_export=False.
+
     Args:
         secure_id: Opaque identifier of the secure file
         secure_storage_dir: Directory where secure files are stored
@@ -150,34 +155,59 @@ def export_secure_file(
         session: Active VaultSession (must be unlocked)
         keyfile: VaultKeyfile (for critical-action key check)
         critical_secret: Optional critical-action secret (required if configured)
-    
+        policy_enforcer: Optional PolicyEnforcer for group gate (Phase 43).
+            When None, group gate is skipped (personal-only device path).
+        group_id: Group to restrict the export check to (passed to enforcer).
+        device_id: Requesting device ID (needed for capability lookup).
+        active_admin_keys: Override list of base64 admin public keys.
+            When None and policy_enforcer is set, fetched automatically from
+            the group_store.
+
     Returns:
         SecureFileMetadata of the exported file
-    
+
     Raises:
         SessionLockedError: If session is locked
-        AuthorizationError: If Export authorization fails
+        AuthorizationError: If Export authorization fails (either gate)
         SecureFileError: If decryption fails
         FileExistsError: If destination already exists
     """
+    from core.group.policy import ExportDeniedError
+
     if not session.is_unlocked:
         raise SessionLockedError("vault session is locked")
-    
-    # Export authorization: always requires authorize_export() even if
-    # "don't ask again" is enabled — Export is the critical action (§4)
+
+    # ---- Gate 1: Group capability gate (Phase 43) ----
+    # Only runs when the device has a PolicyEnforcer wired up.
+    # Fail-closed: ExportDeniedError from check_export() is re-raised as
+    # AuthorizationError so callers only need to catch one exception type.
+    if policy_enforcer is not None:
+        try:
+            policy_enforcer.check_export(
+                group_id=group_id,
+                device_id=device_id,
+                file_id=secure_id,
+                active_admin_keys=active_admin_keys,
+            )
+        except ExportDeniedError as exc:
+            raise AuthorizationError(str(exc)) from exc
+
+    # ---- Gate 2: Personal critical-action key gate (Phase 39.4) ----
+    # Always runs, unchanged.  Export requires authorize_export() even if
+    # "don't ask again" is enabled — Export is the critical action (§4).
     if not session.authorize_export(keyfile, critical_secret):
         raise AuthorizationError(
             "Export authorization failed — critical-action key required or wrong"
         )
-    
+
     # Don't overwrite existing files without explicit confirmation
     if os.path.exists(destination_path):
         raise FileExistsError(f"destination already exists: {destination_path}")
-    
+
     # Decrypt to final location
     dek = session.dek_bytes()
     metadata = decrypt_file(secure_id, secure_storage_dir, dek, destination_path)
-    
+
     return metadata
 
 

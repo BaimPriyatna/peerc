@@ -1879,7 +1879,7 @@ checks specifically.
 - Multi-admin threshold (`k`-of-`n` signature verification) for
 high-stakes actions, per `GROUP_AUTHORITY_DESIGN.md` §14.
 
-**Status:** design complete, no code yet.
+**Status:** selesai (landed as `1.16.0`–`1.16.5`).
 
 ## Phase 43 — Group-Gated Export Authorization
 
@@ -1900,7 +1900,7 @@ device is in a group with `allow_export` policy active.
 - Export capability format, expiry, and nonce: `GROUP_AUTHORITY_DESIGN.md`
 §12.
 
-**Status:** design complete, no code yet.
+**Status:** selesai (landed as `1.17.0`).
 
 ## Phase 44 — Internet P2P Connectivity
 
@@ -1978,23 +1978,19 @@ seperti ini:
         ↓
 11. Device Key Rotation                 ✅ selesai (Phase 40)
         ↓
-12. Security Event Logging              ✅ selesai (Phase 41)
+12. Security Event Logging              ✅ selesai (Phase 41, 1.12.0)
         ↓
-13. Discovery V2                        ⏳ belum ← kita di sini (Phase 5)
+13. Discovery V2                        ✅ selesai (Phase 5, 1.13.0–1.13.1)
         ↓
-14. Event architecture                  ⏳ belum (Phase 26)
+14. Event architecture                  ✅ selesai (Phase 26, 1.14.0)
         ↓
-15. Secure Storage                      🟡 desain lengkap, belum ada kode
-                                            (Phase 39 — SECURE_STORAGE_DESIGN.md)
+15. Secure Storage                      ✅ selesai (Phase 39, 1.15.0–1.15.7)
         ↓
-16. Group Authority System              🟡 desain lengkap, belum ada kode
-                                            (Phase 42 — GROUP_AUTHORITY_DESIGN.md)
+16. Group Authority System              ✅ selesai (Phase 42, 1.16.0–1.16.5)
         ↓
-17. Group-Gated Export Authorization    🟡 desain lengkap, belum ada kode
-                                            (Phase 43, depends on Phase 39+42)
+17. Group-Gated Export Authorization    ✅ selesai (Phase 43, 1.17.0)
         ↓
-18. Internet P2P Connectivity           🟡 desain lengkap, belum ada kode
-                                            (Phase 44 — INTERNET_CONNECTIVITY_DESIGN.md)
+18. Internet P2P Connectivity           ⏳ belum ← kita di sini (Phase 44 — INTERNET_CONNECTIVITY_DESIGN.md)
         ↓
 19. Rendezvous Service (optional)       🟡 desain lengkap, belum ada kode (Phase 45)
         ↓

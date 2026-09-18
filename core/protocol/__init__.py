@@ -47,6 +47,8 @@ from .messages import (
     make_group_leave_request,
     make_group_leave_response,
     make_group_membership_revoke,
+    make_group_export_request,
+    make_group_export_capability,
     new_message_id,
     validate_message,
 )
@@ -88,6 +90,8 @@ __all__ = [
     "make_group_leave_request",
     "make_group_leave_response",
     "make_group_membership_revoke",
+    "make_group_export_request",
+    "make_group_export_capability",
     "new_message_id",
     "validate_message",
 ]

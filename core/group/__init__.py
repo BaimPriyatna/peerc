@@ -1,19 +1,34 @@
-"""core.group — Group Authority System (Phase 42).
+"""core.group — Group Authority System (Phase 42/43).
 
     membership.py — Group dataclass, MembershipCertificate issue/verify
                      (pure crypto/data, no storage, no policy)
     store.py       — GroupStore: SQLite-backed groups/group_memberships/
-                     group_policies/group_admins (mirrors core/trust/store.py's
-                     shared-connection pattern)
+                     group_policies/group_admins/export_capabilities (mirrors
+                     core/trust/store.py's shared-connection pattern)
     policy.py      — GroupPolicy schema, CommunicationRule matrix, core-level
                      PolicyEnforcer and policy violation exceptions (§5, §6, §7, §8, §10)
     admin.py       — AdminRecord, ThresholdApproval (k-of-n signature collection
                      for admin-gated actions) (§14 Multiple Administrators)
-
     audit.py       — signed audit log, verification against active admins,
                      and formatted accountability records (§13 Audit Log)
+    export_auth.py — ExportRequest / ExportCapability + Ed25519 issue/verify
+                     primitives for Group-Gated Export Authorization (§11 AND-gate)
 """
 
+from .export_auth import (
+    ACTION_EXPORT,
+    DEFAULT_CAPABILITY_TTL,
+    ExportAuthError,
+    ExportCapability,
+    ExportRequest,
+    ExpiredCapabilityError,
+    InvalidCapabilityError,
+    InvalidRequestError,
+    create_export_request,
+    issue_export_capability,
+    verify_export_capability,
+    verify_export_request,
+)
 from .audit import (
     AuditError,
     create_group_audit_event,
@@ -144,4 +159,17 @@ __all__ = [
     "verify_leave_request",
     "verify_leave_response",
     "verify_membership_revocation",
+    # Phase 43: Group-Gated Export Authorization
+    "ACTION_EXPORT",
+    "DEFAULT_CAPABILITY_TTL",
+    "ExportAuthError",
+    "ExportCapability",
+    "ExportRequest",
+    "ExpiredCapabilityError",
+    "InvalidCapabilityError",
+    "InvalidRequestError",
+    "create_export_request",
+    "issue_export_capability",
+    "verify_export_capability",
+    "verify_export_request",
 ]

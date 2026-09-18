@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.17.0] — Phase 43: Group-Gated Export Authorization
+
+### Added
+- **`core/group/export_auth.py`** [NEW]: short-lived, admin-signed export capabilities and device export requests per `GROUP_AUTHORITY_DESIGN.md` §11 and §12.
+  - `ExportRequest`: device-signed request binding `request_id`, `device_id`, `device_public_key`, `group_id`, `file_id`, `action="EXPORT"`, and optional `reason` using domain-separated Ed25519 signature (`peerc-group-export-request`).
+  - `ExportCapability`: admin-signed authorization token binding `capability_id`, `request_id`, `device_id`, `group_id`, `file_id`, `action="EXPORT"`, `issued_at`, `expires_at` (default TTL 300 s / 5 minutes), `nonce`, and `admin_device_id` using domain-separated Ed25519 signature (`peerc-group-export-capability`).
+  - `create_export_request()`, `verify_export_request()`, `issue_export_capability()`, and `verify_export_capability()` with active admin public key verification and automatic `POLICY_VIOLATION` event emission on expired tokens.
+- **`core/group/policy.py`**: upgraded `PolicyEnforcer.check_export()` to the Phase 43 AND-gate (§11). When a group restricts export (`allow_export=False`), it looks up an unexpired, unused `ExportCapability` matching the device and file (or wildcard `*`), verifies it against the active admin keys, burns it (one-shot per §12), and emits a `POLICY_CHANGED` security event. If no valid capability is present, fails closed with `ExportDeniedError` and emits `POLICY_VIOLATION`.
+- **`core/group/store.py`**: `export_capabilities` table added to SQLite schema with complete CRUD methods: `store_capability()`, `get_valid_capability()`, `mark_capability_used()` (one-shot burn), `list_capabilities()`, and `purge_expired_capabilities()`.
+- **`core/vault/file_actions.py`**: `export_secure_file()` integrates the group capability gate before the personal critical-action key gate. Both gates must pass (AND-gate) when a device belongs to an export-restricted group. Backward-compatible when no policy enforcer is configured.
+- **`core/vault/database.py`**: unified encrypted vault schema updated to include `export_capabilities`.
+- **`core/protocol/messages.py`**: wire message factories `make_group_export_request` and `make_group_export_capability`, added to `_REQUIRED_FIELDS` and `validate_message`. Re-exported via `core/protocol/__init__.py` and `protocol.py`.
+- **`ui.py`**:
+  - Wired `PolicyEnforcer(self.group_store)` into the live unlocked session and `export_secure_file()`.
+  - Added commands: `/group req-export <id> <fid> [reason]`, `/group authorize-export <id> <dev> [fid] [ttl]`, and `/group caps <id> [dev]`.
+  - Network callbacks: `_on_group_export_request` (with rich admin prompt) and `_on_group_export_capability` (stores verified capability locally).
+  - Updated `/help` with new group export commands.
+- **`tests/test_group_export_auth.py`** [NEW]: 12 tests covering capability issuance, expiry rejection, signature verification, storage/retrieval, one-shot burn, PolicyEnforcer AND-gate, file_actions export integration, wire message validation, and UI command flows.
+
 ## [1.16.5] — Phase 42.5: Signed Audit Log (completes Phase 42: Group Authority System)
 
 ### Added
