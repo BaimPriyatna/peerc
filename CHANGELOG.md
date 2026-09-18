@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.18.0] — Phase 44.1: Locator (IP/port tracking, separate from identity)
+
+### Added
+- **`core/connectivity/locator.py`** [NEW]: `Endpoint` (`device_id`, `kind` — `direct-v4`/`direct-v6`/`rendezvous`, `host`, `port`, `updated_at`) and `Locator` (all currently-known endpoints for one device) dataclasses. Deliberately separate from identity — a device's `device_id` never changes, but it can have several endpoints at once (LAN IP, VPN IP, IPv6, public IP), and they change constantly. `Locator.sorted_endpoints()` orders direct endpoints (freshest first) ahead of rendezvous ones, per §11's "try direct, fall back to rendezvous" pattern applied to endpoint resolution.
+- **`core/connectivity/store.py`** [NEW]: `LocatorStore`, mirroring `TrustStore`/`GroupStore`'s shared-connection pattern exactly. `upsert_endpoint()` (insert or refresh `updated_at` on conflict — the primary key `(device_id, kind, host, port)` is the endpoint's identity), `remove_endpoint()`, `list_endpoints()` (all or filtered by kind), `get_locator()` (never errors on an unknown device — empty `Locator` is a normal state), `prune_stale()` (30-day default, deliberately generous — Internet endpoints legitimately go quiet between sessions, unlike `discovery.py`'s short-lived `PEER_TIMEOUT`).
+- **`core/vault/database.py`**: `device_endpoints` table added to `VaultDatabase`'s unified schema — same reasoning as every other subsystem so far (one encrypted file, not a separate DB).
+- **`ui.py`**: `self.locator_store` wired through the same lock/unlock/hard-lock lifecycle as `self.trust_store`/`self.group_store`.
+- 16 new tests (`tests/test_connectivity_locator.py`, `tests/test_vault_locator_integration.py`): `Endpoint` validation, staleness, sort order, `LocatorStore` CRUD + refusal paths, and vault-connection sharing/persistence across flush+lock+re-unlock.
+
+Not to be confused with `discovery.py`'s `Peer`/`PeerRegistry`: that remains an in-memory, this-session-only cache of LAN broadcast/mDNS sightings. `LocatorStore` is the new persisted, cross-session layer for Internet endpoints, meant to be updated by a signed Endpoint Update rather than re-discovered fresh every run.
+
+No signed endpoint announcement/verification or Add-by-Link yet — `endpoint_update.py` (44.2, reuses `core/crypto/handshake.py`'s `NonceCache` for replay protection) and Add-by-Link (44.3, §3a Link Format — PIN-protected `PEERC1:` links + QR) are later Phase 44 sub-steps.
+
 ## [1.17.0] — Phase 43: Group-Gated Export Authorization
 
 ### Added

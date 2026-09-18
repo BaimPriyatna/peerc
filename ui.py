@@ -104,6 +104,7 @@ from core.group.protocol import (
     verify_leave_response,
     verify_membership_revocation,
 )
+from core.connectivity import LocatorStore
 from core.identity.device_identity import compute_device_id
 from core.vault import (
     DEFAULT_AUTO_LOCK_SECONDS,
@@ -540,6 +541,7 @@ class ChatApp(App):
         self.my_identity = None  # DeviceKeypair, set in on_mount (BUG-004)
         self.trust_store: Optional[TrustStore] = None
         self.group_store: Optional[GroupStore] = None
+        self.locator_store: Optional[LocatorStore] = None
         self.vault_db = None  # VaultDatabase, set in on_mount (Phase 39.2)
         self.vault_persistence = None  # VaultPersistence, set in on_mount (Phase 39.2)
         self.vault_session = None  # VaultSession, set in on_mount (Phase 39.3)
@@ -638,6 +640,10 @@ class ChatApp(App):
 
         # Phase 43: PolicyEnforcer for group-gated export authorization
         self.policy_enforcer = PolicyEnforcer(self.group_store)
+
+        # Phase 44.1: device_endpoints rows share the same vault
+        # connection, same reasoning as TrustStore/GroupStore above.
+        self.locator_store = LocatorStore(conn=self.vault_db.conn)
 
         self.manager = ConnectionManager(
             listen_port=UI_TCP_PORT,
@@ -745,6 +751,8 @@ class ChatApp(App):
                 self.trust_store.adopt_conn(None)
             if self.group_store is not None:
                 self.group_store.adopt_conn(None)
+            if self.locator_store is not None:
+                self.locator_store.adopt_conn(None)
             self.vault_session.lock()
             self.vault_db = None
         elif self.vault_db is not None:
@@ -2235,6 +2243,8 @@ class ChatApp(App):
             self.trust_store.adopt_conn(None)
         if self.group_store is not None:
             self.group_store.adopt_conn(None)
+        if self.locator_store is not None:
+            self.locator_store.adopt_conn(None)
         self.policy_enforcer = None
         if self.vault_session is not None and self.vault_session.is_unlocked:
             self.vault_session.lock()
@@ -2283,6 +2293,8 @@ class ChatApp(App):
                 self.policy_enforcer = PolicyEnforcer(self.group_store)
             if self.trust_store is not None and self.group_store is not None:
                 self.trust_store.set_group_store(self.group_store)
+            if self.locator_store is not None:
+                self.locator_store.adopt_conn(self.vault_db.conn)
             if self.vault_persistence is not None:
                 self.vault_persistence.reattach(self.vault_db)
             self._log("[green]Vault unlocked.[/green]")

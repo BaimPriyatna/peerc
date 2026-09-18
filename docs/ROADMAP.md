@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **1.17.0** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.18.0** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
@@ -48,6 +48,7 @@ the shift from active development into maintenance/updates, not before.
 | `1.16.4` | 42.4 | `core/group/protocol.py` [NEW]: signed Join/Leave/Revoke control-plane payloads (`GroupJoinRequest`/`GroupJoinResponse`, `GroupLeaveRequest`/`GroupLeaveResponse`, `MembershipRevocation`) with domain-separated Ed25519 signatures and join self-consistency checks (`device_id == sha256(public_key)`); `core/protocol/messages.py` gains wire factories/validation for `group_join_request`, `group_join_response`, `group_leave_request`, `group_leave_response`, `group_membership_revoke`; `GroupStore` gains `process_join_response`/`process_leave_request`/`process_leave_response`/`record_revocation` + tombstone metadata accessor; vault schema now includes `group_admins`. UI commands and signed audit log still deferred |
 | `1.16.5` | 42.5 | `core/group/audit.py` [NEW]: signed audit log (`sign_audit_event`/`verify_audit_event`/`create_group_audit_event`/`verify_group_audit_event`/`format_audit_event`) extending Phase 41's `SecurityEvent` with admin Ed25519 signatures; `GroupStore` gains `group_audit_log` table, `record_audit_event`/`list_audit_events`/`get_audit_event`, and automatic lifecycle audit recording (`create_group`, `record_membership`, `revoke_membership`, `set_policy`, `add_admin`, `remove_admin`); vault schema updated; `ui.py` gains `/group audit` command. Completes Phase 42 (Group Authority System) |
 | `1.17.0` | 43 | `core/group/export_auth.py` [NEW]: short-lived admin-signed `ExportCapability` & device `ExportRequest` (`GROUP_AUTHORITY_DESIGN.md` §11/§12); `PolicyEnforcer.check_export()` upgraded to Phase 43 AND-gate; `GroupStore` gains `export_capabilities` table + CRUD (`store_capability`, `get_valid_capability`, `mark_capability_used` one-shot burn, `list_capabilities`, `purge_expired_capabilities`); `core/vault/file_actions.py`'s `export_secure_file()` integrates group capability gate before personal critical-action key gate; `core/vault/database.py` schema updated; wire messages `group_export_request`/`group_export_capability` with schema validation; `ui.py` gains `/group req-export`, `/group authorize-export`, and `/group caps` commands + network callbacks. Completes Phase 43 |
+| `1.18.0` | 44.1 | `core/connectivity/` [NEW]: `locator.py` — `Endpoint`/`Locator` dataclasses, deliberately separate from identity (`INTERNET_CONNECTIVITY_DESIGN.md` §1-3), `direct-v4`/`direct-v6`/`rendezvous` kinds, `Locator.sorted_endpoints()` (direct tried before rendezvous, §11); `store.py` — `LocatorStore` (mirrors `TrustStore`/`GroupStore`'s shared-connection pattern), `upsert_endpoint`/`remove_endpoint`/`list_endpoints`/`get_locator`/`prune_stale`. `device_endpoints` table added to `VaultDatabase`'s unified schema; `ui.py` wires `locator_store` through the same lock/unlock lifecycle as `trust_store`/`group_store`. Persisted and cross-session, unlike `discovery.py`'s in-memory `PeerRegistry`. No signed endpoint announcement or Add-by-Link yet (`endpoint_update.py` is 44.2, Add-by-Link is 44.3) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -83,7 +84,7 @@ numeric phase order in the plan doc:
 
 1. **Phase 42 — Group Authority System** (complete: 42.1 landed as `1.16.0`; 42.2 landed as `1.16.1`; 42.3 landed as `1.16.3`; 42.4 landed as `1.16.4`; 42.5 landed as `1.16.5`)
 2. **Phase 43 — Group-Gated Export Authorization** (complete: landed as `1.17.0`)
-3. **Phase 44 — Internet P2P Connectivity** (design-complete) ← next
+3. **Phase 44 — Internet P2P Connectivity** (in progress: 44.1 `locator.py`+storage landed as `1.18.0`; `endpoint_update.py` (44.2) and Add-by-Link (44.3) still to come) ← next
 4. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
 5. Phase 36/37 — UI/security UX
 6. Phase 28-35 — logging, performance, concurrency, state machines,

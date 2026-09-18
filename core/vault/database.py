@@ -45,9 +45,10 @@ DEFAULT_FLUSH_INTERVAL = 30.0  # seconds (§17)
 # Unified schema (§12): Phase 4's trusted_devices (+ Phase 40's
 # identity_transitions, added after this design doc was first written)
 # plus Phase 27's messages/transfers/settings, plus Phase 42's
-# groups/group_memberships/group_policies/group_admins (per the Phase 42.1 discuss-before-build
-# decision: group data lives in this same encrypted file too, not a
-# separate DB — the vault is always unlocked before this code runs).
+# groups/group_memberships/group_policies/group_admins/group_audit_log/
+# export_capabilities, plus Phase 44's device_endpoints (same reasoning
+# each time: one encrypted file, not a separate DB per subsystem — the
+# vault is always unlocked before this code runs).
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS trusted_devices (
     device_id     TEXT PRIMARY KEY,
@@ -167,6 +168,14 @@ CREATE TABLE IF NOT EXISTS export_capabilities (
     signature       TEXT NOT NULL,
     used            INTEGER NOT NULL DEFAULT 0,
     used_at         REAL
+);
+CREATE TABLE IF NOT EXISTS device_endpoints (
+    device_id   TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    host        TEXT NOT NULL,
+    port        INTEGER NOT NULL,
+    updated_at  REAL NOT NULL,
+    PRIMARY KEY (device_id, kind, host, port)
 );
 """
 
