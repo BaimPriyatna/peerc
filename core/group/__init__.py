@@ -48,7 +48,32 @@ from .policy import (
     PolicyError,
     PolicyViolationError,
 )
-from .store import AdminStatus, DEFAULT_DB_PATH, GroupStore, GroupStoreError, MembershipStatus
+from .protocol import (
+    GroupJoinRequest,
+    GroupJoinResponse,
+    GroupLeaveRequest,
+    GroupLeaveResponse,
+    GroupProtocolError,
+    MembershipRevocation,
+    create_join_request,
+    create_join_response,
+    create_leave_request,
+    create_leave_response,
+    create_membership_revocation,
+    verify_join_request,
+    verify_join_response,
+    verify_leave_request,
+    verify_leave_response,
+    verify_membership_revocation,
+)
+from .store import (
+    AdminStatus,
+    DEFAULT_DB_PATH,
+    GroupStore,
+    GroupStoreError,
+    MembershipRevocationRecord,
+    MembershipStatus,
+)
 
 __all__ = [
     "DEFAULT_ROLE",
@@ -86,4 +111,22 @@ __all__ = [
     "is_approved",
     "sign_approval",
     "verify_approval_signature",
+    # Phase 42.4: join/leave/revoke protocol messages
+    "GroupJoinRequest",
+    "GroupJoinResponse",
+    "GroupLeaveRequest",
+    "GroupLeaveResponse",
+    "GroupProtocolError",
+    "MembershipRevocation",
+    "MembershipRevocationRecord",
+    "create_join_request",
+    "create_join_response",
+    "create_leave_request",
+    "create_leave_response",
+    "create_membership_revocation",
+    "verify_join_request",
+    "verify_join_response",
+    "verify_leave_request",
+    "verify_leave_response",
+    "verify_membership_revocation",
 ]

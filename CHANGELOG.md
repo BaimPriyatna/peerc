@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.16.4] — Phase 42.4: Join/Leave/Revoke protocol messages
+
+### Added
+- **`core/group/protocol.py`** [NEW]: signed Group Authority control-plane payloads for `GroupJoinRequest`/`GroupJoinResponse`, `GroupLeaveRequest`/`GroupLeaveResponse`, and `MembershipRevocation`. All signatures are Ed25519 over domain-separated canonical payloads and reuse the existing device identity key type: joining devices sign their join/leave requests, admins sign approvals and revocations. Join requests also check `device_id == sha256(device_public_key)` before verification.
+- **`core/protocol/messages.py`**: wire factories and schema validation for `group_join_request`, `group_join_response`, `group_leave_request`, `group_leave_response`, and `group_membership_revoke`. The root `protocol.py` shim and `core.protocol` exports include the new factories.
+- **`core/group/store.py`**: `process_join_response()` verifies an active admin's signed approval and records the included membership certificate; `process_leave_request()` verifies a member-signed self-leave and tombstones the membership only when `leave_requires_admin` is not active; `process_leave_response()` and `record_revocation()` verify admin-signed revocation messages before marking membership `REVOKED`. `get_membership_revocation()` exposes tombstone metadata (`revoked_by`, `revoked_at`, reason).
+- **`core/vault/database.py`**: unified encrypted vault schema now includes `group_admins`, matching `GroupStore`'s Phase 42.3 admin table when group data lives inside the vault connection.
+- 8 new tests (`tests/test_group_protocol.py`) covering join request self-consistency, signed join approvals, tamper rejection, self-leave policy handling, admin-approved leave, admin revocation, removed-admin refusal, and wire schema validation.
+
+No UI commands yet — those are intentionally deferred until after this core layer. No audit log yet — that is 42.5.
+
 ## [1.16.3] — Phase 42.3: multi-admin + k-of-n threshold signatures
 
 ### Added

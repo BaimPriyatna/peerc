@@ -42,6 +42,11 @@ from .messages import (
     make_handshake_response,
     make_hello,
     make_hello_ack,
+    make_group_join_request,
+    make_group_join_response,
+    make_group_leave_request,
+    make_group_leave_response,
+    make_group_membership_revoke,
     new_message_id,
     validate_message,
 )
@@ -78,6 +83,11 @@ __all__ = [
     "make_handshake_response",
     "make_hello",
     "make_hello_ack",
+    "make_group_join_request",
+    "make_group_join_response",
+    "make_group_leave_request",
+    "make_group_leave_response",
+    "make_group_membership_revoke",
     "new_message_id",
     "validate_message",
 ]

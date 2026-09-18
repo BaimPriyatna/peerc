@@ -12,6 +12,7 @@ silently persists something it can't cryptographically justify.
 """
 
 import base64
+from dataclasses import dataclass
 import enum
 import json
 import os
@@ -21,7 +22,17 @@ from typing import Dict, List, Optional
 
 from .admin import AdminRecord
 from .membership import Group, MembershipCertificate, verify_membership_certificate
-from .policy import CommunicationRule, GroupPolicy, PolicyEffect
+from .policy import CommunicationRule, GroupPolicy, LeaveRequiresAdminError, PolicyEffect
+from .protocol import (
+    GroupJoinResponse,
+    GroupLeaveRequest,
+    GroupLeaveResponse,
+    MembershipRevocation,
+    verify_join_response,
+    verify_leave_request,
+    verify_leave_response,
+    verify_membership_revocation,
+)
 
 DEFAULT_DB_PATH = os.path.expanduser("~/.peerc/group.db")
 
@@ -90,6 +101,15 @@ class GroupStoreError(Exception):
     """Base class for group store errors."""
 
 
+@dataclass
+class MembershipRevocationRecord:
+    group_id: str
+    device_id: str
+    revoked_by: str
+    revoked_at: float
+    reason: Optional[str] = None
+
+
 def _row_to_group(row: sqlite3.Row) -> Group:
     return Group(
         group_id=row["group_id"],
@@ -139,6 +159,18 @@ def _row_to_policy(row: sqlite3.Row) -> GroupPolicy:
         updated_at=row["updated_at"],
         admin_device_id=row["admin_device_id"],
         signature=row["signature"],
+    )
+
+
+def _row_to_revocation(row: sqlite3.Row) -> Optional[MembershipRevocationRecord]:
+    if not row or row["status"] != MembershipStatus.REVOKED.value or row["revoked_at"] is None:
+        return None
+    return MembershipRevocationRecord(
+        group_id=row["group_id"],
+        device_id=row["device_id"],
+        revoked_by=row["revoked_by"],
+        revoked_at=row["revoked_at"],
+        reason=row["revoke_reason"],
     )
 
 
@@ -306,12 +338,133 @@ class GroupStore:
         return [_row_to_cert(r) for r in rows]
 
     def revoke_membership(self, group_id: str, device_id: str, revoked_by: str, reason: Optional[str] = None) -> None:
+        """Admin-driven local revocation.
+
+        Phase 42.4's network path should prefer record_revocation(),
+        which verifies an admin-signed MembershipRevocation payload first.
+        This direct API remains for local/admin callers but now still
+        requires revoked_by to be a currently-active admin.
+        """
+        if self.get_admin_status(group_id, revoked_by) != AdminStatus.ACTIVE:
+            raise GroupStoreError(
+                f"{revoked_by!r} is not a currently-active admin of group {group_id!r}"
+            )
+        self._mark_membership_revoked(group_id, device_id, revoked_by=revoked_by, reason=reason)
+
+    def get_membership_revocation(self, group_id: str, device_id: str) -> Optional[MembershipRevocationRecord]:
+        row = self._require_conn().execute(
+            "SELECT * FROM group_memberships WHERE group_id = ? AND device_id = ?",
+            (group_id, device_id),
+        ).fetchone()
+        return _row_to_revocation(row) if row else None
+
+    def process_join_response(self, response: GroupJoinResponse) -> MembershipCertificate:
+        """Verify and apply an approved admin-signed join response."""
+        if not response.approved:
+            raise GroupStoreError(f"join request {response.request_id!r} was not approved")
+        if response.certificate is None:
+            raise GroupStoreError("approved join response missing membership certificate")
+        admin = self.get_admin(response.group_id, response.admin_device_id)
+        if admin is None or self.get_admin_status(response.group_id, response.admin_device_id) != AdminStatus.ACTIVE:
+            raise GroupStoreError(
+                f"join response admin_device_id {response.admin_device_id!r} is not a currently-active "
+                f"admin of group {response.group_id!r}"
+            )
+        if not verify_join_response(response, base64.b64decode(admin.public_key)):
+            raise GroupStoreError(f"join response signature invalid for request {response.request_id!r}")
+
+        cert = response.certificate
+        if cert.group_id != response.group_id or cert.device_id != response.device_id:
+            raise GroupStoreError("join response certificate does not match response target")
+        if cert.admin_device_id != response.admin_device_id:
+            raise GroupStoreError("join response certificate was not issued by the response admin")
+        return self.record_membership(cert)
+
+    def process_leave_request(self, request: GroupLeaveRequest) -> None:
+        """Apply a member-signed self-leave when group policy permits it."""
+        cert = self.get_membership(request.group_id, request.device_id)
+        if cert is None:
+            raise GroupStoreError(
+                f"cannot process leave request for unknown membership ({request.group_id!r}, {request.device_id!r})"
+            )
+        if self.get_membership_status(request.group_id, request.device_id) != MembershipStatus.ACTIVE:
+            raise GroupStoreError(
+                f"cannot process leave request for inactive membership ({request.group_id!r}, {request.device_id!r})"
+            )
+        if not verify_leave_request(request, base64.b64decode(cert.device_public_key)):
+            raise GroupStoreError(f"leave request signature invalid for device {request.device_id!r}")
+
+        policy = self.get_policy(request.group_id)
+        if policy is not None and policy.leave_requires_admin:
+            raise LeaveRequiresAdminError(
+                f"leave group denied: member {request.device_id!r} cannot leave group {request.group_id!r} "
+                "without administrator approval (leave_requires_admin=True)"
+            )
+        self._mark_membership_revoked(
+            request.group_id,
+            request.device_id,
+            revoked_by=request.device_id,
+            reason=request.reason or "member left group",
+            revoked_at=request.timestamp,
+        )
+
+    def process_leave_response(self, response: GroupLeaveResponse) -> None:
+        """Verify and apply an approved admin leave response."""
+        if not response.approved:
+            raise GroupStoreError(f"leave request {response.request_id!r} was not approved")
+        if response.revocation is None:
+            raise GroupStoreError("approved leave response missing membership revocation")
+        admin = self.get_admin(response.group_id, response.admin_device_id)
+        if admin is None or self.get_admin_status(response.group_id, response.admin_device_id) != AdminStatus.ACTIVE:
+            raise GroupStoreError(
+                f"leave response admin_device_id {response.admin_device_id!r} is not a currently-active "
+                f"admin of group {response.group_id!r}"
+            )
+        admin_key = base64.b64decode(admin.public_key)
+        if not verify_leave_response(response, admin_key):
+            raise GroupStoreError(f"leave response signature invalid for request {response.request_id!r}")
+        revocation = response.revocation
+        if revocation.group_id != response.group_id or revocation.device_id != response.device_id:
+            raise GroupStoreError("leave response revocation does not match response target")
+        if revocation.revoked_by != response.admin_device_id:
+            raise GroupStoreError("leave response revocation was not issued by the response admin")
+        self.record_revocation(revocation)
+
+    def record_revocation(self, revocation: MembershipRevocation) -> None:
+        """Verify an admin-signed revocation message, then tombstone the membership."""
+        admin = self.get_admin(revocation.group_id, revocation.revoked_by)
+        if admin is None or self.get_admin_status(revocation.group_id, revocation.revoked_by) != AdminStatus.ACTIVE:
+            raise GroupStoreError(
+                f"revocation signer {revocation.revoked_by!r} is not a currently-active "
+                f"admin of group {revocation.group_id!r}"
+            )
+        if not verify_membership_revocation(revocation, base64.b64decode(admin.public_key)):
+            raise GroupStoreError(f"membership revocation signature invalid for device {revocation.device_id!r}")
+        self._mark_membership_revoked(
+            revocation.group_id,
+            revocation.device_id,
+            revoked_by=revocation.revoked_by,
+            reason=revocation.reason,
+            revoked_at=revocation.timestamp,
+        )
+
+    def _mark_membership_revoked(
+        self,
+        group_id: str,
+        device_id: str,
+        *,
+        revoked_by: str,
+        reason: Optional[str] = None,
+        revoked_at: Optional[float] = None,
+    ) -> None:
         if self.get_membership(group_id, device_id) is None:
             raise GroupStoreError(f"cannot revoke unknown membership ({group_id!r}, {device_id!r})")
+        if self.get_membership_status(group_id, device_id) != MembershipStatus.ACTIVE:
+            raise GroupStoreError(f"cannot revoke inactive membership ({group_id!r}, {device_id!r})")
         self._require_conn().execute(
             "UPDATE group_memberships SET status = ?, revoked_by = ?, revoked_at = ?, revoke_reason = ? "
             "WHERE group_id = ? AND device_id = ?",
-            (MembershipStatus.REVOKED.value, revoked_by, time.time(), reason, group_id, device_id),
+            (MembershipStatus.REVOKED.value, revoked_by, revoked_at or time.time(), reason, group_id, device_id),
         )
         self._require_conn().commit()
 

@@ -207,6 +207,126 @@ def make_handshake_finish(signature: str) -> dict:
     }
 
 
+def make_group_join_request(
+    request_id: str,
+    group_id: str,
+    device_id: str,
+    device_public_key: str,
+    requested_role: str,
+    requested_permissions: list[str],
+    signature: str,
+    reason: str | None = None,
+    timestamp: float | None = None,
+) -> dict:
+    return {
+        "type": "group_join_request",
+        "version": PROTOCOL_VERSION,
+        "request_id": request_id,
+        "group_id": group_id,
+        "device_id": device_id,
+        "device_public_key": device_public_key,
+        "requested_role": requested_role,
+        "requested_permissions": requested_permissions,
+        "reason": reason,
+        "timestamp": time.time() if timestamp is None else timestamp,
+        "signature": signature,
+    }
+
+
+def make_group_join_response(
+    request_id: str,
+    group_id: str,
+    device_id: str,
+    approved: bool,
+    admin_device_id: str,
+    signature: str,
+    certificate: dict | None = None,
+    reason: str | None = None,
+    timestamp: float | None = None,
+) -> dict:
+    return {
+        "type": "group_join_response",
+        "version": PROTOCOL_VERSION,
+        "request_id": request_id,
+        "group_id": group_id,
+        "device_id": device_id,
+        "approved": approved,
+        "admin_device_id": admin_device_id,
+        "certificate": certificate,
+        "reason": reason,
+        "timestamp": time.time() if timestamp is None else timestamp,
+        "signature": signature,
+    }
+
+
+def make_group_leave_request(
+    request_id: str,
+    group_id: str,
+    device_id: str,
+    signature: str,
+    reason: str | None = None,
+    timestamp: float | None = None,
+) -> dict:
+    return {
+        "type": "group_leave_request",
+        "version": PROTOCOL_VERSION,
+        "request_id": request_id,
+        "group_id": group_id,
+        "device_id": device_id,
+        "reason": reason,
+        "timestamp": time.time() if timestamp is None else timestamp,
+        "signature": signature,
+    }
+
+
+def make_group_leave_response(
+    request_id: str,
+    group_id: str,
+    device_id: str,
+    approved: bool,
+    admin_device_id: str,
+    signature: str,
+    revocation: dict | None = None,
+    reason: str | None = None,
+    timestamp: float | None = None,
+) -> dict:
+    return {
+        "type": "group_leave_response",
+        "version": PROTOCOL_VERSION,
+        "request_id": request_id,
+        "group_id": group_id,
+        "device_id": device_id,
+        "approved": approved,
+        "admin_device_id": admin_device_id,
+        "revocation": revocation,
+        "reason": reason,
+        "timestamp": time.time() if timestamp is None else timestamp,
+        "signature": signature,
+    }
+
+
+def make_group_membership_revoke(
+    revocation_id: str,
+    group_id: str,
+    device_id: str,
+    revoked_by: str,
+    signature: str,
+    reason: str | None = None,
+    timestamp: float | None = None,
+) -> dict:
+    return {
+        "type": "group_membership_revoke",
+        "version": PROTOCOL_VERSION,
+        "revocation_id": revocation_id,
+        "group_id": group_id,
+        "device_id": device_id,
+        "revoked_by": revoked_by,
+        "reason": reason,
+        "timestamp": time.time() if timestamp is None else timestamp,
+        "signature": signature,
+    }
+
+
 # ---- Schema validation --------------------------------------------------
 #
 # read_frame() only guarantees "valid JSON". It does NOT guarantee the
@@ -228,6 +348,22 @@ REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "handshake_init": ("device_id", "public_key", "ephemeral_key", "nonce", "sender_name"),
     "handshake_response": ("device_id", "public_key", "ephemeral_key", "nonce", "sender_name", "signature"),
     "handshake_finish": ("signature",),
+    "group_join_request": (
+        "request_id", "group_id", "device_id", "device_public_key",
+        "requested_role", "requested_permissions", "timestamp", "signature",
+    ),
+    "group_join_response": (
+        "request_id", "group_id", "device_id", "approved",
+        "admin_device_id", "timestamp", "signature",
+    ),
+    "group_leave_request": ("request_id", "group_id", "device_id", "timestamp", "signature"),
+    "group_leave_response": (
+        "request_id", "group_id", "device_id", "approved",
+        "admin_device_id", "timestamp", "signature",
+    ),
+    "group_membership_revoke": (
+        "revocation_id", "group_id", "device_id", "revoked_by", "timestamp", "signature",
+    ),
     "error": ("code", "message"),
 }
 
@@ -307,5 +443,40 @@ def validate_message(message) -> dict:
         sig = message["signature"]
         if not isinstance(sig, str) or not sig:
             raise ProtocolError(f"{msg_type}.signature must be a non-empty string")
+
+    if msg_type.startswith("group_"):
+        for field_name in ("group_id", "device_id", "signature"):
+            if field_name in message:
+                val = message[field_name]
+                if not isinstance(val, str) or not val:
+                    raise ProtocolError(f"{msg_type}.{field_name} must be a non-empty string")
+        if "timestamp" in message and not isinstance(message["timestamp"], (int, float)):
+            raise ProtocolError(f"{msg_type}.timestamp must be numeric")
+
+    if msg_type == "group_join_request":
+        if not isinstance(message["device_public_key"], str) or not message["device_public_key"]:
+            raise ProtocolError("group_join_request.device_public_key must be a non-empty string")
+        if not isinstance(message["requested_role"], str) or not message["requested_role"]:
+            raise ProtocolError("group_join_request.requested_role must be a non-empty string")
+        if not isinstance(message["requested_permissions"], list):
+            raise ProtocolError("group_join_request.requested_permissions must be a list")
+        if not all(isinstance(p, str) for p in message["requested_permissions"]):
+            raise ProtocolError("group_join_request.requested_permissions must contain only strings")
+
+    if msg_type in ("group_join_response", "group_leave_response"):
+        if not isinstance(message["approved"], bool):
+            raise ProtocolError(f"{msg_type}.approved must be a bool")
+        if not isinstance(message["admin_device_id"], str) or not message["admin_device_id"]:
+            raise ProtocolError(f"{msg_type}.admin_device_id must be a non-empty string")
+        if msg_type == "group_join_response" and message["approved"] and not isinstance(message.get("certificate"), dict):
+            raise ProtocolError("approved group_join_response requires certificate object")
+        if msg_type == "group_leave_response" and message["approved"] and not isinstance(message.get("revocation"), dict):
+            raise ProtocolError("approved group_leave_response requires revocation object")
+
+    if msg_type == "group_membership_revoke":
+        for field_name in ("revocation_id", "revoked_by"):
+            val = message[field_name]
+            if not isinstance(val, str) or not val:
+                raise ProtocolError(f"group_membership_revoke.{field_name} must be a non-empty string")
 
     return message
