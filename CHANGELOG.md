@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.16.3] — Phase 42.3: multi-admin + k-of-n threshold signatures
+
+### Added
+- **`core/group/admin.py`** [NEW]: `AdminRecord` (an admin is just a device whose public key is additionally recorded as a group authority — same identity, no new key type). `ThresholdApproval` — a generic k-of-n signature collector for any admin-gated action: `create_threshold_approval()`, `sign_approval()` (Ed25519, domain-separated payload binding `group_id`+`action_id`+`action_payload`, refuses a second signature from the same admin device), `verify_approval_signature()`, `count_valid_signatures()`/`is_approved()`. Storage-agnostic by design (mirrors `membership.py`'s split): the active-admin set is passed in by the caller rather than looked up here, so a signature from an admin removed after signing simply stops counting toward the threshold, no error needed.
+- **`core/group/store.py`**: `group_admins` table + `add_admin()` (only a currently-active admin can add another, refuses a duplicate `device_id`), `remove_admin()` (refuses removing the last currently-active admin — a group must always have ≥1), `get_admin()`/`get_admin_status()`/`is_admin()`/`list_admins()`, `get_active_admin_public_keys()` (feeds straight into `admin.py`'s threshold functions). `create_group()` now auto-registers the founder as the first active admin row.
+- **`core/group/store.py`**: `record_membership()` and `set_policy()` now check the certificate/policy's `admin_device_id` against ANY currently-active admin of the group (via `group_admins`), not just the group's founding `admin_device_id` — §14 Multiple Administrators is now actually functional end-to-end, not just a standalone module.
+- 18 new tests (`tests/test_group_admin.py`): threshold-approval crypto (happy path, duplicate signer, wrong key, tampered payload, k-of-n math, non-active-admin signatures not counting), admin CRUD (add/remove/list, last-admin-refusal, non-active-adder-refusal, duplicate-refusal), and `record_membership()`/`set_policy()` accepting a second admin's signature and refusing a removed one's.
+
+No Join/Leave/Revoke protocol wiring or audit log yet — those are 42.4/42.5.
+
 ## [1.16.2] — Phase 3.4: identity display metadata (device model, first-run name setup)
 
 ### Added

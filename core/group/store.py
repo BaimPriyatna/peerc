@@ -17,8 +17,9 @@ import json
 import os
 import sqlite3
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 
+from .admin import AdminRecord
 from .membership import Group, MembershipCertificate, verify_membership_certificate
 from .policy import CommunicationRule, GroupPolicy, PolicyEffect
 
@@ -61,12 +62,28 @@ CREATE TABLE IF NOT EXISTS group_policies (
     admin_device_id               TEXT,
     signature                     TEXT
 );
+CREATE TABLE IF NOT EXISTS group_admins (
+    group_id    TEXT NOT NULL,
+    device_id   TEXT NOT NULL,
+    public_key  TEXT NOT NULL,
+    added_at    REAL NOT NULL,
+    added_by    TEXT,
+    status      TEXT NOT NULL,
+    removed_at  REAL,
+    removed_by  TEXT,
+    PRIMARY KEY (group_id, device_id)
+);
 """
 
 
 class MembershipStatus(str, enum.Enum):
     ACTIVE = "active"
     REVOKED = "revoked"
+
+
+class AdminStatus(str, enum.Enum):
+    ACTIVE = "active"
+    REMOVED = "removed"
 
 
 class GroupStoreError(Exception):
@@ -94,6 +111,16 @@ def _row_to_cert(row: sqlite3.Row) -> MembershipCertificate:
         expires_at=row["expires_at"],
         admin_device_id=row["admin_device_id"],
         signature=row["signature"],
+    )
+
+
+def _row_to_admin(row: sqlite3.Row) -> AdminRecord:
+    return AdminRecord(
+        group_id=row["group_id"],
+        device_id=row["device_id"],
+        public_key=row["public_key"],
+        added_at=row["added_at"],
+        added_by=row["added_by"],
     )
 
 
@@ -160,12 +187,30 @@ class GroupStore:
     # ---- groups -------------------------------------------------------
 
     def create_group(self, group: Group) -> Group:
+        """Create *group* and auto-register its founding admin (the
+        group_id/admin_device_id it already names) as the first row in
+        group_admins — from here on, group_admins is the single source
+        of truth for "who can sign for this group" (see add_admin());
+        groups.admin_device_id/admin_public_key just keep recording the
+        founder for provenance."""
         if self.get_group(group.group_id) is not None:
             raise GroupStoreError(f"group_id {group.group_id!r} already exists")
         self._require_conn().execute(
             "INSERT INTO groups (group_id, name, admin_device_id, admin_public_key, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
             (group.group_id, group.name, group.admin_device_id, group.admin_public_key, group.created_at),
+        )
+        self._require_conn().execute(
+            "INSERT INTO group_admins (group_id, device_id, public_key, added_at, added_by, status) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                group.group_id,
+                group.admin_device_id,
+                group.admin_public_key,
+                group.created_at,
+                None,
+                AdminStatus.ACTIVE.value,
+            ),
         )
         self._require_conn().commit()
         return group
@@ -183,11 +228,13 @@ class GroupStore:
     # ---- memberships ----------------------------------------------------
 
     def record_membership(self, cert: MembershipCertificate) -> MembershipCertificate:
-        """Verify *cert* against its group's recorded admin_public_key,
+        """Verify *cert* against ANY currently-active admin of its group
+        (§14 Multiple Administrators — not just the founding admin),
         then insert it as ACTIVE. Refuses (GroupStoreError) if:
           - the group doesn't exist,
-          - the certificate's admin_device_id doesn't match the group's
-            recorded admin (no accepting a cert signed by a non-admin),
+          - the certificate's admin_device_id isn't a currently-active
+            admin of the group (no accepting a cert signed by a non-admin,
+            or by an admin who's since been removed),
           - the signature doesn't verify,
           - a membership already exists for (group_id, device_id) — use
             revoke_membership() first, this never silently overwrites.
@@ -195,12 +242,13 @@ class GroupStore:
         group = self.get_group(cert.group_id)
         if group is None:
             raise GroupStoreError(f"cannot record membership for unknown group_id {cert.group_id!r}")
-        if cert.admin_device_id != group.admin_device_id:
+        admin = self.get_admin(cert.group_id, cert.admin_device_id)
+        if admin is None or self.get_admin_status(cert.group_id, cert.admin_device_id) != AdminStatus.ACTIVE:
             raise GroupStoreError(
-                f"certificate admin_device_id {cert.admin_device_id!r} does not match "
-                f"group {cert.group_id!r}'s recorded admin {group.admin_device_id!r}"
+                f"certificate admin_device_id {cert.admin_device_id!r} is not a currently-active "
+                f"admin of group {cert.group_id!r}"
             )
-        admin_public_key = base64.b64decode(group.admin_public_key)
+        admin_public_key = base64.b64decode(admin.public_key)
         if not verify_membership_certificate(cert, admin_public_key):
             raise GroupStoreError(
                 f"membership certificate signature invalid for device {cert.device_id!r} in group {cert.group_id!r}"
@@ -272,15 +320,18 @@ class GroupStore:
     def set_policy(self, policy: GroupPolicy) -> GroupPolicy:
         """Insert or update group policy.
 
-        Refuses if the group does not exist or if admin_device_id does not match.
+        Refuses if the group does not exist, or if policy.admin_device_id
+        is set but isn't a currently-active admin of the group (§14
+        Multiple Administrators — any active admin may set policy, not
+        just the founder).
         """
         group = self.get_group(policy.group_id)
         if group is None:
             raise GroupStoreError(f"cannot set policy for unknown group_id {policy.group_id!r}")
-        if policy.admin_device_id and policy.admin_device_id != group.admin_device_id:
+        if policy.admin_device_id and self.get_admin_status(policy.group_id, policy.admin_device_id) != AdminStatus.ACTIVE:
             raise GroupStoreError(
-                f"policy admin_device_id {policy.admin_device_id!r} does not match "
-                f"group {group.group_id!r}'s recorded admin {group.admin_device_id!r}"
+                f"policy admin_device_id {policy.admin_device_id!r} is not a currently-active "
+                f"admin of group {group.group_id!r}"
             )
 
         matrix_json = json.dumps([r.to_dict() for r in policy.communication_matrix])
@@ -328,4 +379,104 @@ class GroupStore:
             "SELECT * FROM group_policies ORDER BY updated_at DESC"
         ).fetchall()
         return [_row_to_policy(r) for r in rows]
+
+    # ---- admins (§14 Multiple Administrators) ----------------------------
+
+    def add_admin(self, group_id: str, device_id: str, public_key: bytes, added_by: str) -> AdminRecord:
+        """Register *device_id* as a new admin of *group_id*.
+
+        Refuses (GroupStoreError) if the group doesn't exist, if
+        *added_by* isn't a currently-active admin (only an existing admin
+        can add another — no self-appointment), or if *device_id* is
+        already an admin (active or removed — re-adding a removed admin
+        needs a fresh explicit add_admin call, which this allows once
+        their prior row's status no longer blocks the primary key... see
+        note below).
+        """
+        if self.get_group(group_id) is None:
+            raise GroupStoreError(f"cannot add admin to unknown group_id {group_id!r}")
+        if self.get_admin_status(group_id, added_by) != AdminStatus.ACTIVE:
+            raise GroupStoreError(
+                f"{added_by!r} is not a currently-active admin of group {group_id!r} — "
+                "only an existing admin can add another"
+            )
+        if self.get_admin(group_id, device_id) is not None:
+            raise GroupStoreError(
+                f"device {device_id!r} already has an admin record in group {group_id!r} "
+                "(active or removed) — remove_admin() first if re-adding a removed admin"
+            )
+        record = AdminRecord(
+            group_id=group_id,
+            device_id=device_id,
+            public_key=base64.b64encode(public_key).decode("ascii"),
+            added_at=time.time(),
+            added_by=added_by,
+        )
+        self._require_conn().execute(
+            "INSERT INTO group_admins (group_id, device_id, public_key, added_at, added_by, status) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (record.group_id, record.device_id, record.public_key, record.added_at, record.added_by, AdminStatus.ACTIVE.value),
+        )
+        self._require_conn().commit()
+        return record
+
+    def remove_admin(self, group_id: str, device_id: str, removed_by: str, reason: Optional[str] = None) -> None:
+        """Remove *device_id* as an admin of *group_id*.
+
+        Refuses (GroupStoreError) if *device_id* isn't a currently-active
+        admin, or if they're the LAST currently-active admin — a group
+        must always have at least one admin, removing the last one would
+        orphan it (nobody left who can sign memberships/policy)."""
+        if self.get_admin_status(group_id, device_id) != AdminStatus.ACTIVE:
+            raise GroupStoreError(f"{device_id!r} is not a currently-active admin of group {group_id!r}")
+        active_count = len(self.list_admins(group_id, status=AdminStatus.ACTIVE))
+        if active_count <= 1:
+            raise GroupStoreError(
+                f"cannot remove {device_id!r} — the last active admin of group {group_id!r} "
+                "(a group must always have at least one admin)"
+            )
+        self._require_conn().execute(
+            "UPDATE group_admins SET status = ?, removed_by = ?, removed_at = ? "
+            "WHERE group_id = ? AND device_id = ?",
+            (AdminStatus.REMOVED.value, removed_by, time.time(), group_id, device_id),
+        )
+        self._require_conn().commit()
+
+    def get_admin(self, group_id: str, device_id: str) -> Optional[AdminRecord]:
+        row = self._require_conn().execute(
+            "SELECT * FROM group_admins WHERE group_id = ? AND device_id = ?",
+            (group_id, device_id),
+        ).fetchone()
+        return _row_to_admin(row) if row else None
+
+    def get_admin_status(self, group_id: str, device_id: str) -> Optional[AdminStatus]:
+        row = self._require_conn().execute(
+            "SELECT status FROM group_admins WHERE group_id = ? AND device_id = ?",
+            (group_id, device_id),
+        ).fetchone()
+        return AdminStatus(row["status"]) if row else None
+
+    def is_admin(self, group_id: str, device_id: str) -> bool:
+        return self.get_admin_status(group_id, device_id) == AdminStatus.ACTIVE
+
+    def list_admins(self, group_id: str, status: Optional[AdminStatus] = None) -> List[AdminRecord]:
+        if status is None:
+            rows = self._require_conn().execute(
+                "SELECT * FROM group_admins WHERE group_id = ? ORDER BY added_at ASC", (group_id,)
+            ).fetchall()
+        else:
+            rows = self._require_conn().execute(
+                "SELECT * FROM group_admins WHERE group_id = ? AND status = ? ORDER BY added_at ASC",
+                (group_id, status.value),
+            ).fetchall()
+        return [_row_to_admin(r) for r in rows]
+
+    def get_active_admin_public_keys(self, group_id: str) -> Dict[str, bytes]:
+        """device_id -> raw public key bytes, for every currently-active
+        admin of *group_id* — feed this straight into
+        core.group.admin.count_valid_signatures()/is_approved()."""
+        return {
+            a.device_id: base64.b64decode(a.public_key)
+            for a in self.list_admins(group_id, status=AdminStatus.ACTIVE)
+        }
 
