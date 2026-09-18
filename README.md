@@ -8,7 +8,7 @@
 [![Tests](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml/badge.svg)](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.16.4-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.17.0-informational.svg)](CHANGELOG.md)
 
 A terminal-based peer-to-peer chat and file transfer application. No central server — peers discover each other directly over the local network (LAN or WiFi hotspot) and communicate directly over encrypted TCP connections.
 
@@ -245,14 +245,26 @@ The full suite also runs automatically in CI on every push to `main`. See `.gith
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for phased progress and [`CHANGELOG.md`](CHANGELOG.md) for a full version history.
 
-Current version: **1.16.4** — Phase 39 (Secure Storage) complete! All 5
+Current version: **1.17.0** — Phase 39 (Secure Storage) complete! All 5
 sub-steps done: vault envelope encryption, encrypted database with
 chat/transfer persistence, session/auto-lock model, critical-action Export
 key, and file actions (Open/Export/Delete/Move with executable detection).
 Messages, transfers, trusted devices, and secure files all encrypted at rest.
 Vault auto-locks after 5 min idle (configurable) or on `/lock` / Ctrl+L.
 File commands: `/files`, `/open`, `/export`, `/secure`, `/delete`.
-Next planned: Phase 42 (Group Authority System).
+
+Phase 42 (Group Authority System) and Phase 43 (Group-Gated Export
+Authorization) are also complete: admin-managed groups with Ed25519-signed
+membership certificates, multi-admin with k-of-n threshold signatures,
+core-level policy enforcement (external trust restriction, communication
+matrix), a signed audit log, and short-lived admin-issued export capabilities
+that gate `/export` alongside the personal critical-action key (an admin
+approval AND a personal key, not either/or). Group commands: `/groups`,
+`/group create|info|members|admins|join|leave|approve|reject|revoke|
+addadmin|policy|audit|req-export|authorize-export|caps` — see `/help` in-app
+for the full list with usage.
+
+Next planned: Phase 44 (Internet P2P Connectivity).
 
 ---
 
