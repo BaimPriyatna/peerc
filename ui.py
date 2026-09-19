@@ -36,6 +36,7 @@ import asyncio
 import base64
 import os
 import secrets
+import socket
 import shutil
 import subprocess
 import time
@@ -50,7 +51,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.selection import Selection
 from textual.strip import Strip
-from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, RichLog
+from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, RichLog, TextArea
 
 import chat
 from core.security.events import SecuritySeverity
@@ -104,7 +105,17 @@ from core.group.protocol import (
     verify_leave_response,
     verify_membership_revocation,
 )
-from core.connectivity import LocatorStore
+from core.connectivity import (
+    LinkError,
+    LinkFormatError,
+    LinkSignatureError,
+    Locator,
+    LocatorStore,
+    WrongPinError,
+    create_link,
+    decode_link,
+)
+from core.connectivity.locator import KIND_DIRECT_V4, KIND_DIRECT_V6, KIND_RENDEZVOUS, Endpoint, LocatorError
 from core.identity.device_identity import compute_device_id
 from core.vault import (
     DEFAULT_AUTO_LOCK_SECONDS,
@@ -235,6 +246,56 @@ def validate_display_name(name: str) -> tuple[bool, str]:
     if len(name) > 32:
         return False, "Name too long (max 32 characters)."
     return True, ""
+
+
+def _parse_endpoint_line(line: str, device_id: str) -> Endpoint:
+    """Parse one "host:port" line from LinkGenerateModal's TextArea into
+    an Endpoint, inferring kind the same way /connect already parses its
+    argument (BUG-025's bracket-notation handling for IPv6): "[addr]:port"
+    or "[addr]" for IPv6, "host:port" (single colon) for IPv4/hostname,
+    a bare host with 2+ colons and no brackets for IPv6 with the default
+    port, and a bare host with no colon at all for IPv4/hostname with
+    the default port. Raises ValueError with a human-readable reason on
+    anything that doesn't parse.
+    """
+    line = line.strip()
+    if not line:
+        raise ValueError("empty line")
+
+    host, port = line, UI_TCP_PORT
+    if line.startswith("["):
+        closing = line.find("]")
+        if closing == -1:
+            raise ValueError("unterminated '[' in IPv6 address")
+        host = line[1:closing]
+        rest = line[closing + 1:]
+        if rest.startswith(":"):
+            if not rest[1:].isdigit():
+                raise ValueError(f"invalid port {rest[1:]!r}")
+            port = int(rest[1:])
+    elif line.count(":") == 1:
+        host_part, port_str = line.rsplit(":", 1)
+        if port_str.isdigit():
+            host, port = host_part, int(port_str)
+        # else: a single colon but non-numeric suffix — treat the whole
+        # thing as a bare (unlikely) hostname with the default port.
+    # line.count(":") >= 2 with no brackets: bare IPv6, default port —
+    # host/port already default to (line, UI_TCP_PORT) above.
+
+    try:
+        socket.inet_pton(socket.AF_INET, host)
+        kind = KIND_DIRECT_V4
+    except OSError:
+        try:
+            socket.inet_pton(socket.AF_INET6, host)
+            kind = KIND_DIRECT_V6
+        except OSError:
+            kind = KIND_RENDEZVOUS  # not a literal IP — treat as a hostname
+
+    try:
+        return Endpoint(device_id=device_id, kind=kind, host=host, port=port)
+    except LocatorError as e:
+        raise ValueError(str(e)) from e
 
 
 class NameSetupModal(ModalScreen[str]):
@@ -488,6 +549,138 @@ class FileOfferModal(ModalScreen[bool]):
         self.dismiss(event.button.id == "accept")
 
 
+class LinkMenuModal(ModalScreen[str]):
+    """Phase 44.3 UI: entry point for Add-by-Link, reachable via the
+    /link command or the Ctrl+G binding — both land here first. Returns
+    "generate", "add", or "" (cancel)."""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="vault-dialog"):
+            yield Label("🔗 Add-by-Link")
+            yield Label("Add a peer over the Internet without waiting for them to be on the same network.")
+            yield Button("Generate a link (share with a friend)", id="generate", variant="success")
+            yield Button("Add via a link (paste one you received)", id="add", variant="primary")
+            yield Button("Cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id if event.button.id != "cancel" else "")
+
+
+class LinkGenerateModal(ModalScreen[Optional[tuple]]):
+    """Collect endpoints (pre-filled from detected local addresses,
+    editable) and a PIN, then hand back (endpoints_text, pin) for the
+    caller to actually build the link with create_link() — this modal
+    doesn't touch identity/crypto itself, it's just the click+input
+    surface. Returns None on cancel."""
+
+    def __init__(self, detected_lines: list):
+        super().__init__()
+        self.detected_lines = detected_lines
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="link-generate-dialog"):
+            yield Label("🔗 Generate an Add-by-Link")
+            yield Label(
+                "Endpoints, one per line (host:port). Detected local address is "
+                "pre-filled — edit, add your public IP if you've port-forwarded, "
+                "or remove lines you don't want to share."
+            )
+            yield TextArea("\n".join(self.detected_lines), id="link-endpoints")
+            yield Label("6-digit PIN — send this through a DIFFERENT channel than the link itself")
+            with Horizontal():
+                yield Input(placeholder="e.g. 482913", id="link-pin", max_length=6)
+                yield Button("Random PIN", id="random-pin")
+            yield Label("", id="link-gen-error")
+            yield Button("Generate Link", id="generate", variant="success")
+            yield Button("Cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "random-pin":
+            self.query_one("#link-pin", Input).value = f"{secrets.randbelow(1_000_000):06d}"
+        elif event.button.id == "generate":
+            self._submit()
+        elif event.button.id == "cancel":
+            self.dismiss(None)
+
+    def _submit(self) -> None:
+        endpoints_text = self.query_one("#link-endpoints", TextArea).text
+        pin = self.query_one("#link-pin", Input).value.strip()
+        error_label = self.query_one("#link-gen-error", Label)
+        if not any(line.strip() for line in endpoints_text.splitlines()):
+            error_label.update("At least one endpoint is required.")
+            return
+        if not (len(pin) == 6 and pin.isdigit()):
+            error_label.update("PIN must be exactly 6 digits.")
+            return
+        self.dismiss((endpoints_text, pin))
+
+
+class LinkResultModal(ModalScreen[None]):
+    """Shows a freshly-generated link + its PIN, with a one-click copy
+    for the link text. Purely informational — always dismisses with
+    None."""
+
+    def __init__(self, link: str, pin: str):
+        super().__init__()
+        self.link = link
+        self.pin = pin
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="link-generate-dialog"):
+            yield Label("✅ Link generated")
+            yield Label(
+                "Send the link and the PIN through two SEPARATE trusted channels "
+                "(e.g. link by email, PIN by text or call) — anyone who has both "
+                "can prove they're you."
+            )
+            yield Input(value=self.link, id="link-result-text")
+            yield Label(f"PIN: {self.pin}")
+            yield Button("Copy Link", id="copy", variant="success")
+            yield Button("Close", id="close")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "copy":
+            self.app.copy_to_clipboard(self.link)
+        else:
+            self.dismiss(None)
+
+
+class LinkAddModal(ModalScreen[Optional[tuple]]):
+    """Collect a pasted link + its PIN. Returns (link_text, pin) or None
+    on cancel — decoding/connecting happens in the caller, same
+    click+input-only split as LinkGenerateModal."""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="vault-dialog"):
+            yield Label("🔗 Add a peer via link")
+            yield Input(placeholder="Paste the PEERC1:... link here", id="link-input")
+            yield Input(placeholder="6-digit PIN", id="link-pin-input", max_length=6)
+            yield Label("", id="link-add-error")
+            yield Button("Decode & Connect", id="decode", variant="success")
+            yield Button("Cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "decode":
+            self._submit()
+        else:
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._submit()
+
+    def _submit(self) -> None:
+        link_text = self.query_one("#link-input", Input).value.strip()
+        pin = self.query_one("#link-pin-input", Input).value.strip()
+        error_label = self.query_one("#link-add-error", Label)
+        if not link_text:
+            error_label.update("Paste a link first.")
+            return
+        if not (len(pin) == 6 and pin.isdigit()):
+            error_label.update("PIN must be exactly 6 digits.")
+            return
+        self.dismiss((link_text, pin))
+
+
 class ChatApp(App):
     CSS = """
     #main { height: 1fr; }
@@ -512,6 +705,19 @@ class ChatApp(App):
     #vault-dialog Input { margin-top: 1; }
     #vault-dialog Button { margin-top: 1; }
     #vault-error { color: $error; }
+    #link-generate-dialog {
+        align: center middle;
+        background: $panel;
+        border: thick $accent;
+        padding: 1 2;
+        width: 76;
+        height: auto;
+    }
+    #link-generate-dialog TextArea { height: 6; margin-top: 1; }
+    #link-generate-dialog Input { margin-top: 1; }
+    #link-generate-dialog Button { margin-top: 1; }
+    #link-gen-error { color: $error; }
+    #link-add-error { color: $error; }
     #recovery-code-text {
         margin: 1 0;
         padding: 1;
@@ -530,6 +736,7 @@ class ChatApp(App):
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+k", "clear_chat", "Clear"),
         ("ctrl+l", "lock_vault", "Lock"),
+        ("ctrl+g", "add_by_link", "Add by Link"),
     ]
 
     def __init__(self):
@@ -2256,6 +2463,111 @@ class ChatApp(App):
         await self._lock_and_reprompt(reason="locked manually")
 
     @work
+    async def action_add_by_link(self) -> None:
+        """Ctrl+G / /link — same entry point either way (§3a Add-by-Link)."""
+        await self._open_link_menu()
+
+    async def _open_link_menu(self) -> None:
+        choice = await self.push_screen_wait(LinkMenuModal())
+        if choice == "generate":
+            await self._generate_link_flow()
+        elif choice == "add":
+            await self._add_link_flow()
+
+    async def _generate_link_flow(self) -> None:
+        net = discovery.get_network_info()
+        detected = [f"{ip}:{UI_TCP_PORT}" for ip in net.get("local_ips", [])] or [f"127.0.0.1:{UI_TCP_PORT}"]
+        result = await self.push_screen_wait(LinkGenerateModal(detected))
+        if result is None:
+            return
+        endpoints_text, pin = result
+
+        endpoints = []
+        for line in endpoints_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                endpoints.append(_parse_endpoint_line(line, self.peer_id))
+            except ValueError as e:
+                self._log(f"[red]Skipping invalid endpoint line {line!r}: {e}[/red]")
+        if not endpoints:
+            self._log("[red]No valid endpoints — link not generated.[/red]")
+            return
+
+        try:
+            link = create_link(self.my_identity, endpoints, pin)
+        except LinkError as e:
+            self._log(f"[red]Failed to generate link: {e}[/red]")
+            return
+        await self.push_screen_wait(LinkResultModal(link, pin))
+
+    async def _add_link_flow(self) -> None:
+        result = await self.push_screen_wait(LinkAddModal())
+        if result is None:
+            return
+        link_text, pin = result
+
+        try:
+            payload = decode_link(link_text, pin)
+        except WrongPinError:
+            self._log("[red]Wrong PIN, or the link has been tampered with/corrupted.[/red]")
+            return
+        except LinkSignatureError:
+            self._log(
+                "[red]⚠ PIN was correct but the link's signature is invalid — this may "
+                "mean the PIN was guessed rather than the link being genuine. Not "
+                "connecting.[/red]"
+            )
+            return
+        except LinkFormatError as e:
+            self._log(f"[red]That doesn't look like a valid link: {e}[/red]")
+            return
+
+        self._log(
+            f"[cyan]Link decoded — device {payload.device_id[:8]}, "
+            f"{len(payload.endpoints)} endpoint(s). Attempting connection...[/cyan]"
+        )
+
+        if self.locator_store is not None:
+            for ep in payload.endpoints:
+                try:
+                    self.locator_store.upsert_endpoint(ep)
+                except Exception:
+                    pass  # best-effort — a failed persist shouldn't block trying to connect
+
+        locator = Locator(device_id=payload.device_id, endpoints=payload.endpoints)
+        for ep in locator.sorted_endpoints():
+            if await self._connect_to_link_endpoint(payload.device_id, ep):
+                return
+        self._log("[red]Could not connect to any endpoint in the link.[/red]")
+
+    async def _connect_to_link_endpoint(self, device_id: str, ep: Endpoint) -> bool:
+        """One connection attempt for _add_link_flow(). Returns True on
+        success. A decoded link only proves identity + reachability
+        (§3a "Approval") — the existing TOFU/trust flow still runs
+        exactly as it would for any freshly-discovered peer once the
+        handshake completes."""
+        try:
+            self._discovery.probe_peer(ep.host)
+            addr_key = await self.manager.connect_to(ep.host, ep.port)
+            hello = protocol.make_hello(self.peer_id, self.display_name, UI_TCP_PORT)
+            await self.manager.send(addr_key, hello)
+
+            existing = next((p for p in self.registry.list_peers() if p.ip == ep.host), None)
+            if not existing:
+                self.registry.upsert(device_id, f"Peer ({ep.host})", ep.host, ep.port)
+                self.active_peer_id = device_id
+            else:
+                self.active_peer_id = existing.peer_id
+            self._refresh_peer_list()
+            self._log(f"[green]✓ Connected to {ep.host}:{ep.port}![/green]")
+            return True
+        except Exception as e:
+            self._log(f"[dim]Could not connect via {ep.kind} {ep.host}:{ep.port}: {e}[/dim]")
+            return False
+
+    @work
     async def _reunlock_work(self) -> None:
         """Worker entry for the unlock modal (push_screen_wait must run
         inside a Textual worker, not a bare asyncio task or input handler)."""
@@ -2567,6 +2879,7 @@ class ChatApp(App):
         if cmd in ("/help", "/h"):
             self._log("[bold yellow]╔═══════════════════════ Commands ═══════════════════════╗[/bold yellow]")
             self._log(" [bold cyan]/connect <ip>[:port][/bold cyan]  Connect to peer IP (hotspot / AP fix)")
+            self._log(" [bold cyan]/link[/bold cyan]                 Add-by-Link menu — generate or add via link (Ctrl+G)")
             self._log(" [bold cyan]/peers[/bold cyan]                List all discovered peers & status")
             self._log(" [bold cyan]/msg <name|id>[/bold cyan]        Switch active chat recipient")
             self._log(" [bold cyan]/send <filepath>[/bold cyan]      Offer a file to active peer")
@@ -2609,8 +2922,12 @@ class ChatApp(App):
             self._log(" [dim]• Ctrl+C : Copy selected text (or quit if nothing selected)[/dim]")
             self._log(" [dim]• Ctrl+Shift+C : Copy selected text to clipboard[/dim]")
             self._log(" [dim]• Ctrl+L : Lock vault now[/dim]")
+            self._log(" [dim]• Ctrl+G : Add-by-Link menu (generate or add via link)[/dim]")
             self._log(" [dim]• Ctrl+Q : Quit peerc immediately[/dim]")
             self._log(" [dim]• Ctrl+K : Clear chat history[/dim]")
+
+        elif cmd == "/link":
+            await self._open_link_menu()
 
         elif cmd in ("/connect", "/add"):
             if not arg:

@@ -8,7 +8,7 @@
 [![Tests](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml/badge.svg)](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.18.2-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.18.3-informational.svg)](CHANGELOG.md)
 
 A terminal-based peer-to-peer chat and file transfer application. No central server — peers discover each other directly over the local network (LAN or WiFi hotspot) and communicate directly over encrypted TCP connections.
 
@@ -165,6 +165,7 @@ Type any command into the bottom input box and press Enter:
 |---|---|
 | `/help` | Show available commands and keyboard shortcuts |
 | `/connect <ip>[:port]` | Connect directly to a peer by IP — useful when broadcast is blocked (e.g. AP isolation) |
+| `/link` (or Ctrl+G) | Add-by-Link menu — generate a PIN-protected link to share, or add a peer via one you received |
 | `/peers` | List all discovered peers with IP, port, and status |
 | `/msg <name\|id>` | Switch the active chat recipient |
 | `/send <filepath>` | Offer a file to the active peer |
@@ -245,7 +246,7 @@ The full suite also runs automatically in CI on every push to `main`. See `.gith
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for phased progress and [`CHANGELOG.md`](CHANGELOG.md) for a full version history.
 
-Current version: **1.18.2** — Phase 39 (Secure Storage) complete! All 5
+Current version: **1.18.3** — Phase 39 (Secure Storage) complete! All 5
 sub-steps done: vault envelope encryption, encrypted database with
 chat/transfer persistence, session/auto-lock model, critical-action Export
 key, and file actions (Open/Export/Delete/Move with executable detection).
@@ -264,7 +265,12 @@ approval AND a personal key, not either/or). Group commands: `/groups`,
 addadmin|policy|audit|req-export|authorize-export|caps` — see `/help` in-app
 for the full list with usage.
 
-Next planned: Phase 44 (Internet P2P Connectivity).
+Phase 44 (Internet P2P Connectivity) is in progress: Locator (persisted,
+cross-session endpoint tracking, separate from identity), signed Endpoint
+Update, and Add-by-Link (`/link` or Ctrl+G — generate or redeem a
+PIN-protected `PEERC1:` connection link, click-driven) are done. Still to
+come: wiring signed Endpoint Update into the live connection protocol, and
+Phase 45/46 (Rendezvous, NAT Traversal & Relay).
 
 ---
 

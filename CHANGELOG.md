@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.18.3] — Phase 44.3 UI: Add-by-Link click flow
+
+### Added
+- **`ui.py`**: click-based UI for Add-by-Link, per Baim's direction to focus on click+input over slash commands (QR display deliberately deferred — `generate_qr()` exists in `core/connectivity/link.py` but isn't wired into any modal yet). Reachable two ways, both landing on the same `LinkMenuModal`: the `/link` command, or the new **Ctrl+G** binding (shown in the Footer alongside the existing Lock/Clear/Quit shortcuts).
+- `LinkMenuModal` → `LinkGenerateModal` (pre-fills detected local `host:port` lines from `discovery.get_network_info()` into an editable `TextArea`; "Random PIN" button fills a `secrets`-backed 6-digit PIN) → `LinkResultModal` (shows the generated link + PIN, "Copy Link" button reuses the app's existing `copy_to_clipboard()`).
+- `LinkMenuModal` → `LinkAddModal` (paste a link + its PIN) → decodes with `decode_link()`, then tries each endpoint in `Locator.sorted_endpoints()` order (direct before rendezvous) via the same `ConnectionManager.connect_to()` + hello-handshake sequence `/connect` already uses. Successfully-decoded endpoints are persisted to `locator_store` regardless of whether the connection attempt succeeds. A decoded link is never automatic trust (§3a) — the existing TOFU/trust flow takes over exactly as it would for any freshly-discovered peer once the handshake completes.
+- `_parse_endpoint_line()`: parses a `TextArea` line into an `Endpoint`, inferring `direct-v4`/`direct-v6`/`rendezvous` the same way `/connect`'s own argument parser already does (including BUG-025's IPv6 bracket-notation handling) — one shared mental model for "how do I type an address" across both features.
+- 15 new tests (`tests/test_link_ui.py`: 7 `_parse_endpoint_line()` parsing cases, 8 flow-method tests with `push_screen_wait`/`manager`/`registry` mocked, same pattern as `test_group_ui.py`). Manually verified in a real Textual `Pilot` session too (Ctrl+G → menu → Generate/Add → each modal's Cancel button) as an extra sanity check beyond the mocked unit tests.
+
 ## [1.18.2] — Phase 44.3: Add-by-Link (PIN-protected connection links + QR)
 
 ### Added
