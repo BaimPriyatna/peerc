@@ -684,7 +684,9 @@ class LinkAddModal(ModalScreen[Optional[tuple]]):
 class ChatApp(App):
     CSS = """
     #main { height: 1fr; }
-    #peer-list { width: 30; border: solid $accent; }
+    #sidebar { width: 30; height: 1fr; }
+    #add-link-btn { width: 100%; margin-bottom: 1; }
+    #peer-list { border: solid $accent; height: 1fr; }
     #chat-log { border: solid $accent; }
     #offer-dialog {
         align: center middle;
@@ -777,10 +779,16 @@ class ChatApp(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="main"):
-            yield ListView(id="peer-list")
+            with Vertical(id="sidebar"):
+                yield Button("+ Add by Link", id="add-link-btn", variant="primary")
+                yield ListView(id="peer-list")
             yield SelectableRichLog(id="chat-log", wrap=True, markup=True)
         yield Input(placeholder="Type a message, or /help for commands", id="input-box")
         yield Footer()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "add-link-btn":
+            self.action_add_by_link()
 
     async def on_mount(self) -> None:
         # push_screen_wait() (used for the vault-unlock modals below)

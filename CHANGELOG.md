@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.18.4] — Phase 44.3 UI: visible "+ Add by Link" button on the main screen
+
+### Added
+- **`ui.py`**: a real, always-visible `Button` ("+ Add by Link") above the peer list on the main screen — Ctrl+G and `/link` already opened the same flow, but neither is a persistent on-screen control; this is the third entry point Baim asked for. `compose()`'s peer list now lives inside a new `Vertical(id="sidebar")` alongside the button (same overall sidebar width as before). Clicking it calls the same `action_add_by_link()` the Ctrl+G binding already triggers — button, keybinding, and command all land on the identical `LinkMenuModal` flow, no behavior change to the flow itself.
+- Manually verified in a real Textual `Pilot` session (`pilot.click("#add-link-btn")` → `LinkMenuModal` opens), same style of extra sanity check as `1.18.3`.
+
 ## [1.18.3] — Phase 44.3 UI: Add-by-Link click flow
 
 ### Added
