@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.18.1] — Phase 44.2: signed endpoint announcement + verification
+
+### Added
+- **`core/connectivity/endpoint_update.py`** [NEW]: `EndpointUpdate` dataclass and `create_endpoint_update()`/`verify_endpoint_update()` (§4 Endpoint Update) — a device signs "I am now reachable at host:port" with its existing identity key (the same key it always signs with; an endpoint change alone never touches identity, see the design doc's "Endpoint Update and Key Rotation" comparison). Ed25519 over a domain-separated `device_id`+`kind`+`host`+`port`+`timestamp`+`nonce` payload. Reuses `core/crypto/handshake.py`'s `NonceCache` for replay protection rather than inventing a new primitive, per the design doc's explicit instruction.
+- Verification order is deliberate: signature first, then timestamp freshness (±300s default, configurable), then nonce replay — a forged or unsigned update fails on signature before it ever gets to consume a `NonceCache` slot or have its timestamp judged.
+- `endpoint_update_to_endpoint()` — shape conversion from a verified `EndpointUpdate` into `LocatorStore.upsert_endpoint()`'s `Endpoint` input. Storage-agnostic by design, same split as `membership.py`/`admin.py`: this module never touches `LocatorStore` itself, and the caller supplies its own `NonceCache` instance rather than one being created/persisted here.
+- 13 new tests (`tests/test_connectivity_endpoint_update.py`): validation, happy path, wrong verifying key, tampered host/port/kind, stale/future timestamp, nonce replay (including that a forged update with a stolen nonce doesn't consume the cache slot a real update would need), shape conversion.
+
+No wire-protocol message type or `ui.py` integration yet — this is the crypto/data primitive only. Wiring an `endpoint_update` message into `core/protocol/messages.py` and having `ui.py` apply it to `locator_store` on receipt is a later integration step, most naturally once there's an actual "connect over the Internet" flow (direct or via rendezvous, Phase 45) for a device to piggyback its announcement on.
+
 ## [1.18.0] — Phase 44.1: Locator (IP/port tracking, separate from identity)
 
 ### Added
