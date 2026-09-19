@@ -9,9 +9,12 @@
                           reuses core.crypto.handshake.NonceCache for replay
                           protection; storage-agnostic, same split as
                           membership.py/admin.py
+    link.py             — Add-by-Link (§3a): PIN-protected PEERC1: connection
+                          links (Sign-then-Encrypt, Scrypt+AES-256-GCM reusing
+                          core/vault/crypto.py's primitives) + terminal QR
+                          rendering (optional `qrcode` dependency)
 
-Not yet present (later Phase 44 sub-step, see the design doc and the
-ROADMAP): Add-by-Link (44.3, §3a Link Format).
+Phase 44 is now feature-complete per the design doc's core scope.
 """
 
 from .endpoint_update import (
@@ -21,6 +24,20 @@ from .endpoint_update import (
     create_endpoint_update,
     endpoint_update_to_endpoint,
     verify_endpoint_update,
+)
+from .link import (
+    LINK_PREFIX,
+    PIN_LENGTH,
+    QRCODE_AVAILABLE,
+    LinkError,
+    LinkFormatError,
+    LinkPayload,
+    LinkSignatureError,
+    QrCodeUnavailableError,
+    WrongPinError,
+    create_link,
+    decode_link,
+    generate_qr,
 )
 from .locator import (
     DEFAULT_STALE_SECONDS,
@@ -53,4 +70,17 @@ __all__ = [
     "create_endpoint_update",
     "endpoint_update_to_endpoint",
     "verify_endpoint_update",
+    # Phase 44.3: Add-by-Link
+    "LINK_PREFIX",
+    "PIN_LENGTH",
+    "QRCODE_AVAILABLE",
+    "LinkError",
+    "LinkFormatError",
+    "LinkPayload",
+    "LinkSignatureError",
+    "QrCodeUnavailableError",
+    "WrongPinError",
+    "create_link",
+    "decode_link",
+    "generate_qr",
 ]

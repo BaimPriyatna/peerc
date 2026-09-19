@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.18.2] — Phase 44.3: Add-by-Link (PIN-protected connection links + QR)
+
+### Added
+- **`core/connectivity/link.py`** [NEW]: Add-by-Link (§3a Link Format) — `PEERC1:<base64url(salt‖nonce‖ciphertext)>`. Protected by a 6-digit PIN, not QR-only (QR is an additional render of the same string, never a separate encoding). Sign-then-Encrypt, deliberately in that order: the payload (sender's public key, tagged endpoints, `created_at`) is Ed25519-signed first, then the whole signed bundle is AES-256-GCM-encrypted under `Scrypt(PIN, salt)` — without the PIN, nothing is visible, not even the sender's device_id. Reuses `core/vault/crypto.py`'s exact Scrypt/AES-GCM primitives and RFC 7914 parameters rather than inventing new ones.
+- `create_link()` / `decode_link()`: endpoints pack compactly — `direct-v4`/`direct-v6` as raw address bytes (4/16 bytes), `rendezvous` as a length-prefixed UTF-8 hostname — multiple endpoints per link supported (a link can carry a LAN IP, a VPN IP, an IPv6 address, and a public IP all at once, same as `Locator`).
+- Three distinct failure modes, matching the design doc's own reasoning: `LinkFormatError` (malformed, independent of PIN — bad prefix, bad base64, truncated), `WrongPinError` (AES-GCM auth failed — deliberately doesn't distinguish "wrong PIN" from "tampered link", same reasoning as `core/vault/crypto.py`'s `WrongSecretError`), and `LinkSignatureError` (PIN was correct but the embedded Ed25519 signature didn't verify — the one scenario the signature exists to catch: a brute-forced PIN without the real sender's private key, surfaced distinctly from a simple wrong PIN since it's a materially different, more concerning situation).
+- No expiry by design — a link stays valid until the sender's endpoint actually changes, at which point Endpoint Update (44.2) keeps a verifier's locator current without a new link. A successfully decoded link is never automatic trust — approval stays manual (§3a "Approval"): this module only proves "genuinely device X, reachable here."
+- `generate_qr()`: renders a link as a terminal ASCII/ANSI QR code via the new optional `qrcode` dependency (`pip install peerc[qr]`, mirrors the existing `mdns` optional-dependency pattern) — raises a clear `QrCodeUnavailableError` with install instructions if not installed; the copy-paste string form works fully either way.
+- 15 new tests (`tests/test_connectivity_link.py`): validation, single/multiple/mixed-kind endpoints round-trip, wrong PIN, tampered ciphertext, malformed links, the correct-PIN-forged-signature case, wire-prefix format, QR generation.
+
+No `/link` UI commands, `endpoint_update` wire-protocol message, or logic to actually initiate a connection to a decoded link's endpoint yet — this sub-step is the crypto/format primitive only, same scope pattern as 44.1/44.2.
+
 ## [1.18.1] — Phase 44.2: signed endpoint announcement + verification
 
 ### Added
