@@ -158,6 +158,34 @@ def make_hello_ack(peer_id: str, sender_name: str, tcp_port: int) -> dict:
     }
 
 
+def make_endpoint_update(
+    device_id: str,
+    kind: str,
+    host: str,
+    port: int,
+    timestamp: float,
+    nonce: str,
+    signature: str,
+) -> dict:
+    """Phase 44.4: wire wrapper for a core.connectivity.endpoint_update.
+    EndpointUpdate. Sent right after a hello/hello_ack completes (see
+    ui.py's _send_self_endpoint_update) so the receiving side's
+    LocatorStore gets a cryptographically-confirmed, reusable entry for
+    this device — not just "whatever addr_key this TCP connection came
+    from", which a future reconnect attempt can't act on by itself."""
+    return {
+        "type": "endpoint_update",
+        "version": PROTOCOL_VERSION,
+        "device_id": device_id,
+        "kind": kind,
+        "host": host,
+        "port": port,
+        "timestamp": timestamp,
+        "nonce": nonce,
+        "signature": signature,
+    }
+
+
 def make_handshake_init(
     device_id: str,
     public_key: str,
@@ -429,6 +457,7 @@ REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "file_id", "issued_at", "expires_at", "nonce", "admin_device_id",
         "signature",
     ),
+    "endpoint_update": ("device_id", "kind", "host", "port", "timestamp", "nonce", "signature"),
     "error": ("code", "message"),
 }
 
@@ -495,6 +524,16 @@ def validate_message(message) -> dict:
         port = message["tcp_port"]
         if not isinstance(port, int) or not (0 < port < 65536):
             raise ProtocolError(f"{msg_type}.tcp_port out of range: {port!r}")
+
+    if msg_type == "endpoint_update":
+        port = message["port"]
+        if not isinstance(port, int) or not (0 < port < 65536):
+            raise ProtocolError(f"endpoint_update.port out of range: {port!r}")
+        # Kept as literal strings rather than importing
+        # core.connectivity.locator.VALID_KINDS — this module is
+        # deliberately dependency-free (see its imports above).
+        if message["kind"] not in ("direct-v4", "direct-v6", "rendezvous"):
+            raise ProtocolError(f"endpoint_update.kind not recognized: {message['kind']!r}")
 
     if msg_type in ("handshake_init", "handshake_response"):
         for field_name in ("device_id", "public_key", "ephemeral_key", "nonce"):

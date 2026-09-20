@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.18.5] — Phase 44.4: endpoint_update wired into the live connection protocol
+
+### Added
+- **`peer.py`**: `ConnectionManager.get_peer_public_key(addr_key)` — raw Ed25519 public key bytes for an authenticated connection, mirroring `get_peer_device_id()`'s existing shape (Phase 6 handshake-verified, not self-reported).
+- **`core/protocol/messages.py`**: `make_endpoint_update()`, plus a `REQUIRED_FIELDS` entry and `validate_message()` checks (port range, `kind` must be one of the three recognized values — kept as literal strings rather than importing `core.connectivity`, since this module is deliberately dependency-free). Exported through `core/protocol/__init__.py` and the root `protocol.py` compatibility shim.
+- **`ui.py`**: `_send_self_endpoint_update(addr_key)` — right after every `hello`/`hello_ack` handshake completes, sign and send one `endpoint_update` per detected local IP (`discovery.get_network_info()`) announcing how to reach this device. `_on_endpoint_update(addr_key, msg)` — verifies an incoming one against the connection's AUTHENTICATED public key (`get_peer_public_key()`), never anything the message self-reports, cross-checks the claimed `device_id` against the authenticated identity too (logs a `SECURITY:` warning and refuses on mismatch — the same defense-in-depth pattern `_verify_self_reported_id()` already uses for `hello`), then persists to `locator_store` via replay-guarded `verify_endpoint_update()` (Phase 44.2's `NonceCache`, one instance per running app, not vault-gated since it's in-memory-only regardless).
+- Every successful connection — LAN discovery, `/connect`, or Add-by-Link — now leaves a cryptographically-confirmed, reusable `locator_store` entry behind, not just ones made through Add-by-Link.
+- 14 new tests (`tests/test_endpoint_update_wire.py`): a real two-`ConnectionManager` handshake proving `get_peer_public_key()` returns the correct authenticated key on each side; message factory + schema validation (well-formed accepted, missing fields/bad port/unknown kind rejected); mocked `ChatApp` flow tests for the happy path, a device_id/authenticated-identity mismatch, a tampered/invalid signature, no authenticated session, a replay, and vault-locked no-op.
+
+This closes the last "still unwired" item from Phase 44's original scope besides QR display, which stays deliberately deferred per Baim's direction to focus on the click UI first.
+
 ## [1.18.4] — Phase 44.3 UI: visible "+ Add by Link" button on the main screen
 
 ### Added

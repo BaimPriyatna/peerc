@@ -270,6 +270,18 @@ class ConnectionManager:
         session = self._connections.get(addr_key)
         return session.peer_device_id if session else None
 
+    def get_peer_public_key(self, addr_key: str) -> Optional[bytes]:
+        """The peer's raw Ed25519 public key bytes for addr_key, or None
+        if not connected — same authentication guarantee as
+        get_peer_device_id() (Phase 6 handshake), just the raw key
+        instead of its device_id hash. Used to verify things signed by
+        the peer after the handshake itself, e.g. an endpoint_update
+        (Phase 44.4)."""
+        session = self._connections.get(addr_key)
+        if session is None:
+            return None
+        return bytes.fromhex(session.peer_public_key)
+
     async def close_all(self) -> None:
         for session in list(self._connections.values()):
             await session.close()

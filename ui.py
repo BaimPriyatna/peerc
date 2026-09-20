@@ -115,7 +115,9 @@ from core.connectivity import (
     create_link,
     decode_link,
 )
+from core.connectivity.endpoint_update import EndpointUpdate, create_endpoint_update, verify_endpoint_update
 from core.connectivity.locator import KIND_DIRECT_V4, KIND_DIRECT_V6, KIND_RENDEZVOUS, Endpoint, LocatorError
+from core.crypto.handshake import NonceCache
 from core.identity.device_identity import compute_device_id
 from core.vault import (
     DEFAULT_AUTO_LOCK_SECONDS,
@@ -751,6 +753,10 @@ class ChatApp(App):
         self.trust_store: Optional[TrustStore] = None
         self.group_store: Optional[GroupStore] = None
         self.locator_store: Optional[LocatorStore] = None
+        # Phase 44.4: replay guard for incoming endpoint_update messages.
+        # Not vault-gated (unlike locator_store) — a NonceCache is
+        # in-memory-only regardless, so there's nothing to lock/unlock.
+        self._endpoint_nonce_cache = NonceCache()
         self.vault_db = None  # VaultDatabase, set in on_mount (Phase 39.2)
         self.vault_persistence = None  # VaultPersistence, set in on_mount (Phase 39.2)
         self.vault_session = None  # VaultSession, set in on_mount (Phase 39.3)
@@ -2696,6 +2702,7 @@ class ChatApp(App):
                     self.active_peer_id = peer_id
                 ack = protocol.make_hello_ack(self.peer_id, self.display_name, UI_TCP_PORT)
                 await self.manager.send(addr_key, ack)
+                await self._send_self_endpoint_update(addr_key)
         elif msg_type == "hello_ack":
             peer_id = evt.message.get("peer_id", "")
             sender_name = evt.message.get("sender_name", ip)
@@ -2705,6 +2712,9 @@ class ChatApp(App):
                 self._refresh_peer_list()
                 if self.active_peer_id is None:
                     self.active_peer_id = peer_id
+                await self._send_self_endpoint_update(addr_key)
+        elif msg_type == "endpoint_update":
+            await self._on_endpoint_update(addr_key, evt.message)
         elif msg_type == "group_join_request":
             await self._on_group_join_request(addr_key, evt.message)
         elif msg_type == "group_join_response":
@@ -2740,6 +2750,74 @@ class ChatApp(App):
             )
             return False
         return True
+
+    async def _send_self_endpoint_update(self, addr_key: str) -> None:
+        """Phase 44.4: right after a hello/hello_ack handshake completes,
+        announce our own current reachable address(es) to the peer we
+        just connected to, signed — so their locator_store gets a
+        cryptographically-confirmed, reusable entry for us, not just
+        "whatever address this one TCP connection happened to come
+        from". Best-effort: a send failure here shouldn't break the
+        chat connection itself, so failures are logged quietly rather
+        than raised.
+        """
+        net = discovery.get_network_info()
+        local_ips = net.get("local_ips", [])
+        for ip in local_ips:
+            try:
+                update = create_endpoint_update(self.my_identity, KIND_DIRECT_V4, ip, UI_TCP_PORT)
+                wire = protocol.make_endpoint_update(
+                    device_id=update.device_id,
+                    kind=update.kind,
+                    host=update.host,
+                    port=update.port,
+                    timestamp=update.timestamp,
+                    nonce=update.nonce,
+                    signature=update.signature,
+                )
+                await self.manager.send(addr_key, wire)
+            except Exception:
+                pass  # best-effort — see docstring
+
+    async def _on_endpoint_update(self, addr_key: str, msg: dict) -> None:
+        """Verify an incoming endpoint_update and, if valid, persist it
+        to locator_store. The signature is checked against the peer's
+        AUTHENTICATED public key for this connection (Phase 6 handshake
+        — get_peer_public_key(), not anything self-reported in the
+        message itself), so a device can only announce endpoints for
+        ITSELF, never impersonate another device_id's locator entry."""
+        if self.locator_store is None:
+            return  # vault locked — nothing to persist into right now
+        peer_public_key = self.manager.get_peer_public_key(addr_key)
+        if peer_public_key is None:
+            return  # no authenticated session for this addr_key
+
+        update = EndpointUpdate(
+            device_id=msg["device_id"],
+            kind=msg["kind"],
+            host=msg["host"],
+            port=msg["port"],
+            timestamp=msg["timestamp"],
+            nonce=msg["nonce"],
+            signature=msg["signature"],
+        )
+        authenticated_id = self.manager.get_peer_device_id(addr_key)
+        if update.device_id != authenticated_id:
+            self._log(
+                f"[red][bold]SECURITY:[/bold] endpoint_update claimed device_id "
+                f"{update.device_id[:8]}... but the authenticated identity for this "
+                f"connection is {str(authenticated_id)[:8]}... — ignoring[/red]"
+            )
+            return
+        if not verify_endpoint_update(update, peer_public_key, self._endpoint_nonce_cache):
+            return  # verify_endpoint_update already emits a SecurityEvent on failure
+
+        try:
+            self.locator_store.upsert_endpoint(
+                Endpoint(device_id=update.device_id, kind=update.kind, host=update.host, port=update.port, updated_at=update.timestamp)
+            )
+        except Exception:
+            pass  # best-effort persistence, same reasoning as _send_self_endpoint_update
 
     def _on_security_warning(self, evt: SecurityWarning) -> None:
         peer_info = f" (peer {evt.peer_id[:8]})" if evt.peer_id else ""
