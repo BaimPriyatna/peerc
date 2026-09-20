@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.18.7] — Phase 45.2: RendezvousCache + three wire messages
+
+### Added
+- **`core/connectivity/rendezvous.py`** [NEW]: `RendezvousCache` — in-memory (never persisted) cache of `EndpointUpdate` blobs, indexed by `(group_id, device_id)`. Implements the two host-side operations: `register()` (a device publishes its current endpoint for group-mates to look up) and `lookup()` (a group member retrieves a cached update for a target peer). `evict()`/`evict_all_for_group()` clean up on disconnect or when rendezvous mode is disabled for a group (45.3 wires the on/off toggle). `RendezvousAuthError` (non-member requester/target), `RendezvousSignatureError` (bad EndpointUpdate sig), `RendezvousDeviceIdMismatchError` (EndpointUpdate.device_id ≠ authenticated peer) cover the three distinct refusal cases.
+- **Authorization shape** (same as every other `group_*` message): the host checks ONLY that both parties hold an active, non-revoked `MembershipCertificate` for `group_id`. No new crypto — `register()` re-verifies the `EndpointUpdate`'s existing Ed25519 signature (Phase 44.2) before caching; `lookup()` returns the blob verbatim for the requester to re-verify against the target's public key from the group `MembershipCertificate`. The host is a mail carrier, never a vouched-for party.
+- **Three new wire messages** in `core/protocol/messages.py`:
+  - `make_rendezvous_register(group_id, endpoint_update)` — sender publishes its signed update blob to the host
+  - `make_rendezvous_lookup(group_id, target_device_id)` — requester asks the host for a cached update
+  - `make_rendezvous_lookup_response(group_id, target_device_id, endpoint_update | None)` — host's reply (update dict or null on cache miss)
+- `REQUIRED_FIELDS` entries and `validate_message()` checks for all three types, including nested validation of the embedded `endpoint_update` dict (required string fields, port range, recognized `kind`) — the same rigor as the standalone `endpoint_update` message.
+- `core/connectivity/__init__.py` exports `RendezvousCache`, `RendezvousError`, `RendezvousAuthError`, `RendezvousSignatureError`, `RendezvousDeviceIdMismatchError`.
+- 32 new tests (`tests/test_rendezvous_cache.py`): register happy-path, device_id mismatch, non-member sender, tampered signature, overwrite; lookup happy-path, cache miss, non-member requester, non-member target; evict/evict_all_for_group (including cross-group isolation); all four factories; validate_message() well-formed/missing-required/bad-nested-port/bad-nested-kind/non-dict/null-update for all three types.
+
+`/group rendezvous on|off` command and wiring the IP-change trigger through rendezvous-mode peers are Phase 45.3.
+
 ## [1.18.6] — Phase 45.1: own-IP-change detection
 
 ### Added

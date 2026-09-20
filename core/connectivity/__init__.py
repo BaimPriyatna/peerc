@@ -1,4 +1,4 @@
-"""core.connectivity — Internet P2P Connectivity (Phase 44).
+"""core.connectivity — Internet P2P Connectivity (Phase 44/45).
 
     locator.py         — Endpoint/Locator dataclasses (pure data, no storage) —
                           deliberately separate from identity (device_id);
@@ -13,8 +13,13 @@
                           links (Sign-then-Encrypt, Scrypt+AES-256-GCM reusing
                           core/vault/crypto.py's primitives) + terminal QR
                           rendering (optional `qrcode` dependency)
-
-Phase 44 is now feature-complete per the design doc's core scope.
+    rendezvous.py       — Phase 45.2: RendezvousCache (in-memory) + the three
+                          Rendezvous wire-message handlers
+                          (rendezvous_register / rendezvous_lookup /
+                          rendezvous_lookup_response). Opt-in per-group; any
+                          active group member can relay already-signed
+                          EndpointUpdates. No new crypto — host relays, requester
+                          re-verifies.
 """
 
 from .endpoint_update import (
@@ -50,6 +55,13 @@ from .locator import (
     LocatorError,
 )
 from .store import DEFAULT_DB_PATH, LocatorStore, LocatorStoreError
+from .rendezvous import (
+    RendezvousAuthError,
+    RendezvousCache,
+    RendezvousDeviceIdMismatchError,
+    RendezvousError,
+    RendezvousSignatureError,
+)
 
 __all__ = [
     "DEFAULT_STALE_SECONDS",
@@ -83,4 +95,10 @@ __all__ = [
     "create_link",
     "decode_link",
     "generate_qr",
+    # Phase 45.2: Rendezvous
+    "RendezvousCache",
+    "RendezvousError",
+    "RendezvousAuthError",
+    "RendezvousSignatureError",
+    "RendezvousDeviceIdMismatchError",
 ]

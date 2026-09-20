@@ -411,6 +411,58 @@ def make_group_export_capability(
     }
 
 
+def make_rendezvous_register(group_id: str, endpoint_update: dict) -> dict:
+    """Phase 45.2: sent by a device to a rendezvous host to cache its
+    signed EndpointUpdate so other group members can look it up.
+
+    *endpoint_update* is a plain dict produced by
+    core.connectivity.endpoint_update.EndpointUpdate's fields — the host
+    relays the blob verbatim, never re-signs it.
+    """
+    return {
+        "type": "rendezvous_register",
+        "version": PROTOCOL_VERSION,
+        "group_id": group_id,
+        "endpoint_update": endpoint_update,
+        "timestamp": time.time(),
+    }
+
+
+def make_rendezvous_lookup(group_id: str, target_device_id: str) -> dict:
+    """Phase 45.2: ask a rendezvous host for the cached EndpointUpdate
+    of *target_device_id* within *group_id*."""
+    return {
+        "type": "rendezvous_lookup",
+        "version": PROTOCOL_VERSION,
+        "group_id": group_id,
+        "target_device_id": target_device_id,
+        "timestamp": time.time(),
+    }
+
+
+def make_rendezvous_lookup_response(
+    group_id: str,
+    target_device_id: str,
+    endpoint_update: dict | None,
+) -> dict:
+    """Phase 45.2: host's reply to a rendezvous_lookup.
+
+    *endpoint_update* is the verbatim cached EndpointUpdate dict if one
+    exists, or None when nothing is cached for the target. The requester
+    must re-verify the returned blob's Ed25519 signature against the
+    target's public key from the group MembershipCertificate — the host
+    is a mail carrier, never a vouched-for party.
+    """
+    return {
+        "type": "rendezvous_lookup_response",
+        "version": PROTOCOL_VERSION,
+        "group_id": group_id,
+        "target_device_id": target_device_id,
+        "endpoint_update": endpoint_update,  # dict or null
+        "timestamp": time.time(),
+    }
+
+
 # ---- Schema validation --------------------------------------------------
 #
 # read_frame() only guarantees "valid JSON". It does NOT guarantee the
@@ -458,6 +510,9 @@ REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "signature",
     ),
     "endpoint_update": ("device_id", "kind", "host", "port", "timestamp", "nonce", "signature"),
+    "rendezvous_register": ("group_id", "endpoint_update", "timestamp"),
+    "rendezvous_lookup": ("group_id", "target_device_id", "timestamp"),
+    "rendezvous_lookup_response": ("group_id", "target_device_id", "endpoint_update", "timestamp"),
     "error": ("code", "message"),
 }
 
@@ -599,4 +654,60 @@ def validate_message(message) -> dict:
             if not isinstance(val, (int, float)) or isinstance(val, bool):
                 raise ProtocolError(f"group_export_capability.{num_field} must be numeric")
 
+    if msg_type == "rendezvous_register":
+        gid = message["group_id"]
+        if not isinstance(gid, str) or not gid:
+            raise ProtocolError("rendezvous_register.group_id must be a non-empty string")
+        eu = message["endpoint_update"]
+        if not isinstance(eu, dict):
+            raise ProtocolError("rendezvous_register.endpoint_update must be an object")
+        # Validate the nested EndpointUpdate has the minimum required fields.
+        _validate_endpoint_update_dict(eu, parent="rendezvous_register.endpoint_update")
+
+    if msg_type == "rendezvous_lookup":
+        gid = message["group_id"]
+        if not isinstance(gid, str) or not gid:
+            raise ProtocolError("rendezvous_lookup.group_id must be a non-empty string")
+        tid = message["target_device_id"]
+        if not isinstance(tid, str) or not tid:
+            raise ProtocolError("rendezvous_lookup.target_device_id must be a non-empty string")
+
+    if msg_type == "rendezvous_lookup_response":
+        gid = message["group_id"]
+        if not isinstance(gid, str) or not gid:
+            raise ProtocolError("rendezvous_lookup_response.group_id must be a non-empty string")
+        tid = message["target_device_id"]
+        if not isinstance(tid, str) or not tid:
+            raise ProtocolError("rendezvous_lookup_response.target_device_id must be a non-empty string")
+        eu = message["endpoint_update"]
+        if eu is not None:
+            if not isinstance(eu, dict):
+                raise ProtocolError(
+                    "rendezvous_lookup_response.endpoint_update must be an object or null"
+                )
+            _validate_endpoint_update_dict(eu, parent="rendezvous_lookup_response.endpoint_update")
+
     return message
+
+
+# ---------------------------------------------------------------------------
+# Internal validation helpers
+# ---------------------------------------------------------------------------
+
+
+def _validate_endpoint_update_dict(eu: dict, *, parent: str) -> None:
+    """Validate a nested EndpointUpdate dict (used inside rendezvous
+    messages). Mirrors the standalone endpoint_update validation checks
+    in validate_message() but operates on an arbitrary sub-dict."""
+    for field_name in ("device_id", "kind", "host", "nonce", "signature"):
+        val = eu.get(field_name)
+        if not isinstance(val, str) or not val:
+            raise ProtocolError(f"{parent}.{field_name} must be a non-empty string")
+    port = eu.get("port")
+    if not isinstance(port, int) or not (0 < port < 65536):
+        raise ProtocolError(f"{parent}.port out of range: {port!r}")
+    if eu.get("kind") not in ("direct-v4", "direct-v6", "rendezvous"):
+        raise ProtocolError(f"{parent}.kind not recognized: {eu.get('kind')!r}")
+    ts = eu.get("timestamp")
+    if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+        raise ProtocolError(f"{parent}.timestamp must be numeric")
