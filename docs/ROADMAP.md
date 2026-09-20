@@ -12,6 +12,78 @@ whenever work moves into a new phase (e.g. Phase 5's sub-steps landed as
 `a` (MAJOR) is bumped only once the whole project is finished — `2.x` marks
 the shift from active development into maintenance/updates, not before.
 
+## Orientation (for any agent or human picking this up)
+
+Multiple sessions/agents work on this repo in parallel — this section
+exists so a fresh one can get oriented from the repo alone, without
+needing anything explained again.
+
+**Workflow rules — non-negotiable:**
+1. `git pull` before touching anything. Never assume local state is current.
+2. Work in small, independently-tested sub-steps. Full regression suite
+   (`pytest`, all green) before every commit — no exceptions.
+3. Four files sync on every version bump, same commit: `pyproject.toml`,
+   `CHANGELOG.md`, `docs/ROADMAP.md` (this file), `README.md`. See
+   "Versioning policy" above for what bumps which digit.
+4. Commit and push together once a sub-step is ready. Never leave
+   uncommitted changes sitting in the working tree between sessions.
+5. For a genuinely large/undesigned feature (no existing byte-level
+   spec — Phase 45's Rendezvous was one, Phase 42/44 were not), resolve
+   the design with the user FIRST and write it down (see "Phase 45
+   design (resolved)" below for the shape that should take) — don't
+   start writing code against an architecture diagram alone.
+6. GitHub pushes use a fine-grained PAT passed inline in chat for that
+   push only — redact it from all output, and tell the user to revoke
+   it right after.
+
+**Module map — where things live:**
+
+```
+core/identity/    Ed25519 device keypairs. device_id = SHA256(pubkey) —
+                   never trust a self-reported identifier over this.
+core/crypto/      Handshake (mutual auth + session keys), NonceCache
+                   (replay protection, reused by connectivity/endpoint_update.py).
+core/transport/   TCP framing + the authenticated/encrypted session layer
+                   peer.py's ConnectionManager sits on top of.
+core/trust/       TOFU trust decisions (TrustStore) — per-device, local only.
+core/vault/       At-rest encryption (Phase 39). VaultDatabase's unified
+                   schema is the ONE encrypted SQLite file every other
+                   subsystem's persistent storage lives in — see below.
+core/group/       Group Authority (Phase 42/43): membership certs, policy
+                   enforcement, multi-admin/threshold sigs, signed audit
+                   log, group-gated export capabilities.
+core/connectivity/
+                   Internet connectivity (Phase 44/45): Locator (endpoint
+                   tracking, deliberately separate from identity), signed
+                   Endpoint Update, Add-by-Link, Rendezvous (in progress).
+core/security/    Cross-cutting SecurityEvent logging (Phase 41).
+discovery.py      LAN peer discovery (UDP broadcast + mDNS) — in-memory,
+                   this-session-only. NOT the same thing as a Locator.
+peer.py           ConnectionManager — owns live TCP connections, is the
+                   thing that actually knows who's "currently connected".
+protocol.py       Root shim over core/protocol/{frame,messages,errors}.py
+                   — wire message factories + schema validation live there.
+ui.py             Textual TUI — the only place these subsystems get wired
+                   together. Almost everything else is a library.
+```
+
+**Storage pattern, once you've seen it you'll see it everywhere:** every
+subsystem that needs to persist something (`trust/`, `group/`,
+`connectivity/`) defines its own `Store` class that can EITHER own a
+private SQLite file OR share an already-open connection
+(`VaultDatabase.conn`). In `ui.py` they all share the vault connection,
+following the vault's own lock/unlock lifecycle (`adopt_conn(None)` on
+lock, `adopt_conn(conn)` on re-unlock) — grep any existing `*_store =
+...Store(conn=self.vault_db.conn)` line in `ui.py` for the pattern to
+copy when adding a new one.
+
+**Crypto pattern, also everywhere:** any new signed structure gets its
+own domain-separation prefix (e.g. `_LINK_SIGN_DOMAIN`,
+`_ADMIN_APPROVAL_DOMAIN`) prepended to whatever gets signed/verified —
+so a signature for one purpose can never be replayed as a signature for
+another. Look at `core/group/admin.py` or `core/connectivity/
+endpoint_update.py` for the shape to copy.
+
 ## Done
 
 | Version | Phase | What |
