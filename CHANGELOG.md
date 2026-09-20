@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.18.6] — Phase 45.1: own-IP-change detection
+
+### Added
+- **Phase 45 design resolved with Baim** before any code — `INTERNET_CONNECTIVITY_DESIGN.md` §9/§10 were architecture diagrams only, no wire protocol. Landed: opt-in per-group Rendezvous (not a separate server — any active group member can relay other members' already-signed `EndpointUpdate`s), no new crypto (host relays, requester re-verifies), 3 wire messages (`rendezvous_register`/`rendezvous_lookup`/`rendezvous_lookup_response`), freshness reused from `EndpointUpdate`'s own window, in-memory-only cache. Full writeup: `docs/ROADMAP.md`'s new "Phase 45 design (resolved)" section.
+- **`peer.py`**: `ConnectionManager.list_connected_addr_keys()` — a snapshot list of currently-connected addr_keys, safe to iterate even if a connection drops mid-loop.
+- **`ui.py`**: `_check_ip_change()` — polled every `IP_CHANGE_CHECK_INTERVAL` (30s, `set_interval`) against `_last_known_local_ips` (in-memory only, never persisted — same reasoning as `device_info.py`'s model string). On a real change, `_reannounce_endpoint_to_connected_peers()` re-sends a signed self-announcement (reusing 44.4's `_send_self_endpoint_update()`) to every currently-connected peer, closing §7 "IP Change Problem" for the case where at least one path is still up. A transient empty reading (e.g. a brief interface blip) is deliberately ignored rather than treated as a change — it would otherwise clobber the baseline and make the next real reading always look "new".
+- 8 new tests (`tests/test_ip_change_detection.py`): `list_connected_addr_keys()` empty/populated (real handshake), `_check_ip_change()` no-change/change/empty-reading/added-interface, `_reannounce_endpoint_to_connected_peers()` fan-out and no-op-when-nothing-connected.
+
+The rendezvous-relay case (target peer NOT currently connected) is 45.2 (`RendezvousCache` + wire messages) and 45.3 (`/group rendezvous on|off` + wiring), not this sub-step.
+
 ## [1.18.5] — Phase 44.4: endpoint_update wired into the live connection protocol
 
 ### Added

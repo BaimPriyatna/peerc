@@ -28,7 +28,7 @@ tests) must be explicit about which identity it's handshaking as.
 """
 
 import asyncio
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, List, Optional
 
 import protocol
 from core.crypto.handshake import HandshakeError
@@ -260,6 +260,12 @@ class ConnectionManager:
 
     def is_connected(self, addr_key: str) -> bool:
         return addr_key in self._connections
+
+    def list_connected_addr_keys(self) -> List[str]:
+        """Snapshot of currently-connected addr_keys. A plain list copy,
+        not a live view — safe to iterate even if a connection drops
+        mid-loop (e.g. Phase 44.4/45.1's re-announce-on-IP-change)."""
+        return list(self._connections.keys())
 
     def get_peer_device_id(self, addr_key: str) -> Optional[str]:
         """The cryptographically authenticated device_id of the peer at

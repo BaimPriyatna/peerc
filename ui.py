@@ -139,6 +139,7 @@ from core.vault import (
 from peer import ConnectionManager
 
 UI_TCP_PORT = 5656
+IP_CHANGE_CHECK_INTERVAL = 30  # seconds — Phase 45.1's own-IP-change poll
 AUTO_LOCK_POLL_SECONDS = 1.0
 
 
@@ -757,6 +758,7 @@ class ChatApp(App):
         # Not vault-gated (unlike locator_store) — a NonceCache is
         # in-memory-only regardless, so there's nothing to lock/unlock.
         self._endpoint_nonce_cache = NonceCache()
+        self._last_known_local_ips: set = set()  # Phase 45.1, set for real in _setup()
         self.vault_db = None  # VaultDatabase, set in on_mount (Phase 39.2)
         self.vault_persistence = None  # VaultPersistence, set in on_mount (Phase 39.2)
         self.vault_session = None  # VaultSession, set in on_mount (Phase 39.3)
@@ -906,6 +908,13 @@ class ChatApp(App):
         asyncio.create_task(self._discovery.run())
         asyncio.create_task(self._prune_ui_loop())
         asyncio.create_task(self._auto_lock_loop())
+
+        # Phase 45.1: baseline for own-IP-change detection (§7 "IP
+        # Change Problem"). In-memory only, same reasoning as
+        # device_info.py's model string — recomputed fresh each run,
+        # never persisted, so there's nothing stale to clean up.
+        self._last_known_local_ips = set(discovery.get_network_info().get("local_ips", []))
+        self.set_interval(IP_CHANGE_CHECK_INTERVAL, self._check_ip_change)
 
         log = self.query_one("#chat-log", SelectableRichLog)
         log.write(f"[bold cyan]Started as {self.display_name} · {self.device_model} (id: {self.peer_id[:8]})[/bold cyan]")
@@ -2750,6 +2759,30 @@ class ChatApp(App):
             )
             return False
         return True
+
+    def _check_ip_change(self) -> None:
+        """Phase 45.1: polled every IP_CHANGE_CHECK_INTERVAL seconds
+        (set_interval, registered in _setup()). Compares the currently-
+        detected local IPs against the last known set; on a change,
+        re-announces our endpoint to every currently-connected peer —
+        closes §7 "IP Change Problem" for the "at least one path is
+        still up" case. The rendezvous-relay case (peer not currently
+        connected) is 45.2/45.3, not this sub-step.
+        """
+        current = set(discovery.get_network_info().get("local_ips", []))
+        if current and current != self._last_known_local_ips:
+            self._last_known_local_ips = current
+            self._reannounce_endpoint_to_connected_peers()
+
+    @work
+    async def _reannounce_endpoint_to_connected_peers(self) -> None:
+        if self.manager is None:
+            return
+        addr_keys = self.manager.list_connected_addr_keys()
+        if addr_keys:
+            self._log(f"[cyan]Local address changed — re-announcing to {len(addr_keys)} connected peer(s)...[/cyan]")
+        for addr_key in addr_keys:
+            await self._send_self_endpoint_update(addr_key)
 
     async def _send_self_endpoint_update(self, addr_key: str) -> None:
         """Phase 44.4: right after a hello/hello_ack handshake completes,

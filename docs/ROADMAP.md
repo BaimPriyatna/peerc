@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **1.18.5** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.18.6** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
@@ -54,6 +54,7 @@ the shift from active development into maintenance/updates, not before.
 | `1.18.3` | 44.3 UI | Add-by-Link click UI in `ui.py`: `LinkMenuModal`/`LinkGenerateModal`/`LinkResultModal`/`LinkAddModal` (button+input driven, no command typing needed once opened), reachable two ways — `/link` command or the new Ctrl+G binding, both land on the same menu. Generate flow pre-fills detected local `host:port` (editable `TextArea`, `+ Random PIN` button); Add flow decodes a pasted link+PIN then tries each endpoint (`Locator.sorted_endpoints()` order — direct before rendezvous) via the existing `ConnectionManager.connect_to()`/hello-handshake path already used by `/connect`, persists endpoints to `locator_store`, and hands off to the existing TOFU/trust flow exactly as any freshly-discovered peer would. QR display deliberately deferred (`generate_qr()` from 44.3 exists but isn't wired into any modal yet, per Baim's call to focus on the click flow first). 15 new tests (`tests/test_link_ui.py`) |
 | `1.18.4` | 44.3 UI | Visible **"+ Add by Link"** button added to the main screen itself, not just Ctrl+G/Footer/`/link` — sits above the peer list in a new `#sidebar` container (`ui.py`'s `compose()` restructured slightly: `ListView` now lives inside `Vertical(id="sidebar")` alongside the button, same overall width). Clicking it calls the same `action_add_by_link()` Ctrl+G already triggers, so all three entry points (button, keybinding, command) land on the identical `LinkMenuModal` flow. No behavior change to the flow itself — purely a third, always-visible way in |
 | `1.18.5` | 44.4 | `endpoint_update` (44.2) wired into the live connection protocol: `peer.ConnectionManager.get_peer_public_key()` (raw Ed25519 bytes for an authenticated addr_key, mirrors `get_peer_device_id()`); `protocol.make_endpoint_update()` + `REQUIRED_FIELDS`/`validate_message()` entries (kind/port range checked); `ui.py` sends a signed self-announcement for each detected local IP right after every `hello`/`hello_ack` (`_send_self_endpoint_update()`), and verifies incoming ones against the connection's AUTHENTICATED public key — never anything self-reported in the message — cross-checking `device_id` too before persisting to `locator_store` (`_on_endpoint_update()`). Every successful connection (LAN or via Add-by-Link) now leaves a cryptographically-confirmed, reusable locator entry behind, not just Add-by-Link ones. 14 new tests (`tests/test_endpoint_update_wire.py`) — this closes the last "still unwired" item from Phase 44's original scope besides QR display, which stays deliberately deferred |
+| `1.18.6` | 45.1 | Phase 45 (Rendezvous, opt-in per-group per Baim's direction — not a separate server) begins: own-IP-change detection, closing §7 "IP Change Problem" for the "at least one connected peer" case. `peer.ConnectionManager.list_connected_addr_keys()` [NEW]; `ui.py` polls `discovery.get_network_info()` every `IP_CHANGE_CHECK_INTERVAL` (30s, `set_interval`) against `_last_known_local_ips` (in-memory only, same non-persistence reasoning as `device_info.py`'s model string) — on a real change, re-announces (`_send_self_endpoint_update()`, reusing 44.4) to every currently-connected peer (`_reannounce_endpoint_to_connected_peers()`); a transient empty reading (network blip) is deliberately ignored rather than treated as a change, so it can't spuriously clobber the baseline or fire a no-op re-announce. The rendezvous-relay case (peer NOT currently connected) is 45.2/45.3, not this sub-step. 8 new tests (`tests/test_ip_change_detection.py`) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -68,8 +69,6 @@ are complete.**
 
 | Phase | What | Where |
 |---|---|---|
-| 44 | Internet P2P Connectivity (Identity/Locator separation, signed Endpoint Update) | `INTERNET_CONNECTIVITY_DESIGN.md` |
-| 45 | Rendezvous Service (optional, endpoint discovery only, never a data path) | `INTERNET_CONNECTIVITY_DESIGN.md` §Rendezvous |
 | 46 | NAT Traversal & Relay Fallback (optional, relay only sees ciphertext) | `INTERNET_CONNECTIVITY_DESIGN.md` §Optional Relay |
 | — | File Viewer (In-memory streaming viewer: Text/Code, Media/Image/Audio, Document/PDF/EPUB) | `FILE_VIEWER_DESIGN.md` — architecture, open-source stack (PyMuPDF, Chafa/Kitty, miniaudio/mpv, Rich), zero-disk-cache security pipeline |
 
@@ -81,6 +80,47 @@ Connectivity + the Device Key Rotation and Security Event Logging they
 depend on) — not in the original phase numbering, appended after Phase
 39 rather than renumbering anything earlier.
 
+## Phase 45 design (resolved)
+
+`INTERNET_CONNECTIVITY_DESIGN.md` §9/§10's Rendezvous sections are
+architecture diagrams only — no wire protocol, no auth scheme, no
+registration/lookup format. Unlike Phase 42/44, this genuinely needed
+new design work before any code, resolved with Baim as follows:
+
+- **Opt-in per-group, not a separate server.** Any device that's an
+  active member of a Group (Phase 42) can turn on "Rendezvous mode" for
+  that group. While on, it relays already-signed `EndpointUpdate`s
+  (Phase 44.2) between group members who aren't currently connected to
+  each other directly.
+- **No new crypto.** An `EndpointUpdate` is already self-contained-
+  signed by its owner. A rendezvous host only relays the blob — the
+  requester re-verifies the signature themselves against the target's
+  public key (known from that group's `MembershipCertificate`s), so the
+  host is a mail carrier, never a vouched-for party.
+- **Three wire messages:** `rendezvous_register(group_id, endpoint_update)`
+  ("relay my update to group-mates who ask"), `rendezvous_lookup(group_id,
+  target_device_id)` ("got a cached update for X?"), `rendezvous_lookup_response`
+  (relays the cached `EndpointUpdate` verbatim, or empty). The host checks
+  only that both parties are active members of `group_id` — same
+  authorization shape as every other `group_*` message.
+- **Freshness is free.** `EndpointUpdate`'s own ±300s window (44.2)
+  already makes a stale cached entry fail the requester's own
+  verification — no separate expiry logic needed on the host side.
+- **In-memory only**, not persisted to the vault — matches the design
+  doc's "Rendezvous bukan data server" explicitly. A restart clears the
+  cache; a relayed device re-registers once reconnected.
+- **Known limitation, stated up front:** a requester still needs at
+  least one connected path into the group to ask "where's X" at all —
+  Rendezvous can't bootstrap a fully isolated device from zero. This is
+  the same non-guarantee already documented for §8 "Simultaneous
+  Offline IP Change", not a new one.
+
+Sub-steps: 45.1 (own-IP-change detection + re-announce to connected
+peers, no rendezvous relay involved yet) → 45.2 (`RendezvousCache` +
+the three wire messages) → 45.3 (`/group rendezvous <group_id> on|off`
++ wiring the IP-change trigger to push through rendezvous-mode peers
+too, for the case where the target isn't currently connected).
+
 ## Next up (recommended order)
 
 Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
@@ -89,14 +129,15 @@ numeric phase order in the plan doc:
 
 1. **Phase 42 — Group Authority System** (complete: 42.1 landed as `1.16.0`; 42.2 landed as `1.16.1`; 42.3 landed as `1.16.3`; 42.4 landed as `1.16.4`; 42.5 landed as `1.16.5`)
 2. **Phase 43 — Group-Gated Export Authorization** (complete: landed as `1.17.0`)
-3. **Phase 44 — Internet P2P Connectivity** (feature-complete except QR display, deliberately deferred: 44.1 Locator as `1.18.0`, 44.2 signed Endpoint Update as `1.18.1`, 44.3 Add-by-Link + click UI + sidebar button as `1.18.2`-`1.18.4`, 44.4 Endpoint Update wire-protocol integration as `1.18.5`) ← next
-4. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
-5. Phase 36/37 — UI/security UX
-6. Phase 28-35 — logging, performance, concurrency, state machines,
+3. **Phase 44 — Internet P2P Connectivity** (feature-complete except QR display, deliberately deferred: 44.1 Locator as `1.18.0`, 44.2 signed Endpoint Update as `1.18.1`, 44.3 Add-by-Link + click UI + sidebar button as `1.18.2`-`1.18.4`, 44.4 Endpoint Update wire-protocol integration as `1.18.5`)
+4. **Phase 45 — Rendezvous** (in progress, opt-in per-group design resolved with Baim since the original doc was architecture-only — see "Phase 45 design (resolved)" below: 45.1 own-IP-change detection landed as `1.18.6`; 45.2 `RendezvousCache`+wire messages and 45.3 `/group rendezvous on|off` still to come) ← next
+5. Phase 46 — NAT Traversal & Relay (optional, design-complete)
+6. Phase 36/37 — UI/security UX
+7. Phase 28-35 — logging, performance, concurrency, state machines,
    error protocol
-7. Phase 38 — Project structure final (**not done now, deliberately** —
+8. Phase 38 — Project structure final (**not done now, deliberately** —
    see note below)
-8. Security audit, release
+9. Security audit, release
 
 ## Why Phase 38 (final project structure) isn't done yet
 
