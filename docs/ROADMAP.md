@@ -196,35 +196,60 @@ messages, `1.18.7`) → 45.3 (`/group rendezvous <group_id> on|off|find`
 rendezvous-mode peers too, for the case where the target isn't
 currently connected, `1.18.8`).
 
-## Phase 46 design (NOT resolved — reserved, stop before coding)
+## Phase 46 design (resolved)
 
 `INTERNET_CONNECTIVITY_DESIGN.md` §11 "Optional Relay" is 6 lines,
 architecture-only — same situation Phase 45's §9/§10 were in before that
-got resolved with Baim (see "Phase 45 design (resolved)" above). Do NOT
-start writing code for Phase 46 against the diagram alone. Undefined,
-needs a design conversation first:
+got resolved with Baim (see "Phase 45 design (resolved)" above).
+Resolved with Baim as follows:
 
-- **NAT traversal technique.** The design only says "try direct, fall
-  back to relay" — it never says HOW direct is attempted when a simple
-  socket connect fails (STUN-style hole punching? UDP hole punching?
-  Nothing at all, straight to relay on any failure?).
-- **Who can be a relay, and how is that authorized?** Rendezvous
-  resolved this as "opt-in per-group, any active member can host" — does
-  Relay follow the same shape, or does relaying (which carries live
-  traffic, not just a cached locator blob) need a stricter/different
-  authorization model?
-- **Relay protocol/wire format.** No message types defined for
-  requesting a relay, establishing one, or the actual relay data framing.
-- **Scope relative to Rendezvous.** Is a Rendezvous host allowed to also
-  relay, are they deliberately separate roles, or is relay capability
-  itself discovered/negotiated through the Rendezvous mechanism already
-  built?
+- **NAT traversal: no active hole-punching.** "Try direct, fall back to
+  relay" means: attempt a normal connect via the existing
+  `ConnectionManager.connect_to` with a short timeout; on failure, fall
+  straight to Relay. No STUN/ICE — out of scope, too large for a TUI app
+  of this size.
+- **Relay authorization: opt-in per-group, separate toggle from
+  Rendezvous.** `/group relay <group_id> on|off`, distinct from
+  `/group rendezvous ... on|off`. Relaying carries live bandwidth
+  traffic — a heavier commitment than caching a small `EndpointUpdate`
+  blob — so a device can enable Rendezvous without Relay, or vice versa.
+- **Finding an available relay: reuse `rendezvous_lookup`.** When A
+  can't reach B directly, A asks a group-mate currently in Relay-mode to
+  bridge the connection. If multiple group-mates are in Relay-mode, A
+  tries them one at a time — sequential, short timeout each, same
+  pattern as the direct-connect attempt — rather than in parallel, to
+  avoid managing several half-open relay attempts at once.
+- **Relay protocol: pure byte-pipe, no chaining.** A sends
+  `relay_request(target_device_id)` to relay R over their already-
+  authenticated A↔R session (no separate signature needed — the session
+  itself is already Phase 6-authenticated, same trust basis as every
+  other in-band command). R checks that A is an active member of the
+  shared group and that R already has a live connection to B — R never
+  searches for B itself, and never chains through a second relay. If
+  both hold, R becomes a pure byte-pipe: raw bytes from A go to B and
+  back, unparsed — R does not decode the peerc protocol inside the pipe
+  at all. The Phase 6 handshake between A and B runs end-to-end through
+  that pipe, identical to a direct connection.
+- **B is passive.** B is not notified or asked to approve being
+  relayed — the pipe carries the same end-to-end-encrypted,
+  end-to-end-authenticated traffic B would see on a direct connection,
+  so B loses nothing by not knowing R is in the path.
+- **Pipe lifecycle.** The pipe at R closes the moment either the A↔R or
+  B↔R connection drops — no separate idle-timeout or manual-stop
+  mechanism.
+- **Scope relative to Rendezvous:** the two roles are independent but
+  composable. A device can be a Rendezvous host, a Relay, both, or
+  neither; finding a relay candidate reuses the existing
+  `rendezvous_lookup` machinery rather than inventing a second discovery
+  mechanism.
 
-Marked "design complete" in `IMPLEMENTATION_PLAN.md`, same as Phase 45
-was — that label means the ARCHITECTURE is agreed, not that there's a
-spec ready to implement. Resolve with Baim the same way Phase 45 was
-resolved (a "Phase 46 design (resolved)" section replacing this one)
-before any `core/` code gets written for it.
+Needs one genuinely new primitive beyond what Rendezvous already has: a
+"pipe" mode in `peer.py`/`core/transport/` that forwards raw bytes
+between two sockets, bypassing the normal decode-message pipeline.
+Everything else — group membership checks, session authentication, the
+connect-with-timeout pattern — reuses existing machinery.
+
+Sub-steps: not yet started.
 
 ## Next up (recommended order)
 
@@ -233,9 +258,8 @@ disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
 1. **Phase 45 — Rendezvous** (complete: opt-in per-group design resolved with Baim since the original doc was architecture-only — see "Phase 45 design (resolved)" below: 45.1 own-IP-change detection as `1.18.6`, 45.2 `RendezvousCache`+wire messages as `1.18.7`, 45.3 `ui.py` wiring as `1.18.8`)
-2. Phase 46 — NAT Traversal & Relay (optional; design NOT resolved —
-   see "Phase 46 design (NOT resolved...)" above, stop and design with
-   Baim before writing any code) ← next
+2. Phase 46 — NAT Traversal & Relay (optional; design resolved with
+   Baim — see "Phase 46 design (resolved)" above, ready to implement) ← next
 3. Phase 36/37 — UI/security UX
 4. Phase 28-35 — logging, performance, concurrency, state machines,
    error protocol
