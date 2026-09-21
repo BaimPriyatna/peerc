@@ -196,6 +196,36 @@ messages, `1.18.7`) → 45.3 (`/group rendezvous <group_id> on|off|find`
 rendezvous-mode peers too, for the case where the target isn't
 currently connected, `1.18.8`).
 
+## Phase 46 design (NOT resolved — reserved, stop before coding)
+
+`INTERNET_CONNECTIVITY_DESIGN.md` §11 "Optional Relay" is 6 lines,
+architecture-only — same situation Phase 45's §9/§10 were in before that
+got resolved with Baim (see "Phase 45 design (resolved)" above). Do NOT
+start writing code for Phase 46 against the diagram alone. Undefined,
+needs a design conversation first:
+
+- **NAT traversal technique.** The design only says "try direct, fall
+  back to relay" — it never says HOW direct is attempted when a simple
+  socket connect fails (STUN-style hole punching? UDP hole punching?
+  Nothing at all, straight to relay on any failure?).
+- **Who can be a relay, and how is that authorized?** Rendezvous
+  resolved this as "opt-in per-group, any active member can host" — does
+  Relay follow the same shape, or does relaying (which carries live
+  traffic, not just a cached locator blob) need a stricter/different
+  authorization model?
+- **Relay protocol/wire format.** No message types defined for
+  requesting a relay, establishing one, or the actual relay data framing.
+- **Scope relative to Rendezvous.** Is a Rendezvous host allowed to also
+  relay, are they deliberately separate roles, or is relay capability
+  itself discovered/negotiated through the Rendezvous mechanism already
+  built?
+
+Marked "design complete" in `IMPLEMENTATION_PLAN.md`, same as Phase 45
+was — that label means the ARCHITECTURE is agreed, not that there's a
+spec ready to implement. Resolve with Baim the same way Phase 45 was
+resolved (a "Phase 46 design (resolved)" section replacing this one)
+before any `core/` code gets written for it.
+
 ## Next up (recommended order)
 
 Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
@@ -203,7 +233,9 @@ disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
 1. **Phase 45 — Rendezvous** (complete: opt-in per-group design resolved with Baim since the original doc was architecture-only — see "Phase 45 design (resolved)" below: 45.1 own-IP-change detection as `1.18.6`, 45.2 `RendezvousCache`+wire messages as `1.18.7`, 45.3 `ui.py` wiring as `1.18.8`)
-2. Phase 46 — NAT Traversal & Relay (optional, design-complete) ← next
+2. Phase 46 — NAT Traversal & Relay (optional; design NOT resolved —
+   see "Phase 46 design (NOT resolved...)" above, stop and design with
+   Baim before writing any code) ← next
 3. Phase 36/37 — UI/security UX
 4. Phase 28-35 — logging, performance, concurrency, state machines,
    error protocol
