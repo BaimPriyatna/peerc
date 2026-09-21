@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.18.8] — Phase 45.3: rendezvous wired into ui.py — Phase 45 complete
+
+### Added
+- **`ui.py`**: `/group rendezvous <group_id> on|off|find <device_id>` — `on`/`off` toggle this device as a rendezvous host for a group (checked against real active membership via `GroupStore`; `off` also evicts that group's cached entries via `RendezvousCache.evict_all_for_group()`); `find` broadcasts a `rendezvous_lookup` to every currently-connected peer (`ConnectionManager.list_connected_addr_keys()`).
+- Host-side `_on_rendezvous_register()`/`_on_rendezvous_lookup()`: both gate on `group_id in self._rendezvous_active_groups` — a device that hasn't opted in for a group stays completely silent for it (no response at all for `lookup`, not even an empty one), so the toggle is a real opt-in rather than every connected device passively accumulating cache entries nobody asked it to hold.
+- Requester-side `_on_rendezvous_lookup_response()`: re-verifies the returned `EndpointUpdate` against the target's public key from the requester's OWN `MembershipCertificate` copy (`GroupStore.get_membership()`) — never trusts the host, matching the design's "mail carrier, never a vouched-for party" principle — cross-checks the claimed `target_device_id` against `EndpointUpdate.device_id` too, then upserts to `locator_store` and attempts a connection (reuses 44.3's `_connect_to_link_endpoint()`).
+- `_register_with_rendezvous_hosts()`: fires alongside `_send_self_endpoint_update()` on every `hello`/`hello_ack` and on 45.1's `_reannounce_endpoint_to_connected_peers()` (IP change) — sends a `rendezvous_register` for every group this device is an active member of, to whichever peer it just connected to. This is the "push my new IP to rendezvous when the receiver isn't connected" behavior Baim asked for: a group-mate hosting rendezvous who happens to be connected will cache it; one who isn't hosting silently ignores it.
+- 19 new tests (`tests/test_rendezvous_ui.py`): the on/off/find command (unknown group, non-member, happy path, cache eviction, no-connected-peers), host-side register/lookup (not-hosting gate, happy path, device_id mismatch, found/not-found responses), requester-side lookup_response (no endpoint, unknown target, device_id mismatch, invalid signature, happy path), and self-registration fan-out.
+
+### Fixed
+- **`core/protocol/__init__.py` / `protocol.py`**: Phase 45.2 added `make_rendezvous_register`/`make_rendezvous_lookup`/`make_rendezvous_lookup_response` to `core/protocol/messages.py` but never exported them through the package `__init__.py` or the root compatibility shim — `protocol.make_rendezvous_lookup(...)` raised `AttributeError` from any caller outside `messages.py` itself. Caught immediately by this sub-step's own tests failing on first run.
+
+**Phase 45 (Rendezvous) is now complete**: 45.1 (`1.18.6`), 45.2 (`1.18.7`), 45.3 (`1.18.8`).
+
 ## [1.18.7] — Phase 45.2: RendezvousCache + three wire messages
 
 ### Added

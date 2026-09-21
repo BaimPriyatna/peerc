@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **1.18.7** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.18.8** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
@@ -128,6 +128,7 @@ endpoint_update.py` for the shape to copy.
 | `1.18.5` | 44.4 | `endpoint_update` (44.2) wired into the live connection protocol: `peer.ConnectionManager.get_peer_public_key()` (raw Ed25519 bytes for an authenticated addr_key, mirrors `get_peer_device_id()`); `protocol.make_endpoint_update()` + `REQUIRED_FIELDS`/`validate_message()` entries (kind/port range checked); `ui.py` sends a signed self-announcement for each detected local IP right after every `hello`/`hello_ack` (`_send_self_endpoint_update()`), and verifies incoming ones against the connection's AUTHENTICATED public key — never anything self-reported in the message — cross-checking `device_id` too before persisting to `locator_store` (`_on_endpoint_update()`). Every successful connection (LAN or via Add-by-Link) now leaves a cryptographically-confirmed, reusable locator entry behind, not just Add-by-Link ones. 14 new tests (`tests/test_endpoint_update_wire.py`) — this closes the last "still unwired" item from Phase 44's original scope besides QR display, which stays deliberately deferred |
 | `1.18.6` | 45.1 | Phase 45 (Rendezvous, opt-in per-group per Baim's direction — not a separate server) begins: own-IP-change detection, closing §7 "IP Change Problem" for the "at least one connected peer" case. `peer.ConnectionManager.list_connected_addr_keys()` [NEW]; `ui.py` polls `discovery.get_network_info()` every `IP_CHANGE_CHECK_INTERVAL` (30s, `set_interval`) against `_last_known_local_ips` (in-memory only, same non-persistence reasoning as `device_info.py`'s model string) — on a real change, re-announces (`_send_self_endpoint_update()`, reusing 44.4) to every currently-connected peer (`_reannounce_endpoint_to_connected_peers()`); a transient empty reading (network blip) is deliberately ignored rather than treated as a change, so it can't spuriously clobber the baseline or fire a no-op re-announce. The rendezvous-relay case (peer NOT currently connected) is 45.2/45.3, not this sub-step. 8 new tests (`tests/test_ip_change_detection.py`) |
 | `1.18.7` | 45.2 | `core/connectivity/rendezvous.py` [NEW]: `RendezvousCache` (in-memory, never persisted) — stores signed `EndpointUpdate` blobs indexed by `(group_id, device_id)`, the host-side half of the Rendezvous protocol. `register()` checks device_id self-consistency against the authenticated channel, active group membership, and re-verifies the `EndpointUpdate`'s Ed25519 signature before caching. `lookup()` checks that both requester and target are active members, returns the cached blob verbatim (requester re-verifies). `evict()`/`evict_all_for_group()`. Three new wire messages in `core/protocol/messages.py`: `make_rendezvous_register`, `make_rendezvous_lookup`, `make_rendezvous_lookup_response` — all with `REQUIRED_FIELDS` entries and `validate_message()` checks including nested EndpointUpdate dict validation. 32 new tests (`tests/test_rendezvous_cache.py`). No `ui.py` integration yet — `/group rendezvous on|off` and wiring through rendezvous-mode peers is 45.3 |
+| `1.18.8` | 45.3 | Rendezvous wired into `ui.py`, completing Phase 45. `/group rendezvous <id> on|off|find <device>` — `on`/`off` toggle this device as a host for a group (checked against real active membership; `off` evicts that group's cached entries); `find` broadcasts `rendezvous_lookup` to every currently-connected peer. Host-side handlers `_on_rendezvous_register`/`_on_rendezvous_lookup` gate on `group_id in self._rendezvous_active_groups` — a device not opted in for a group stays completely silent for it (true opt-in, not just an unused cache). Requester-side `_on_rendezvous_lookup_response` re-verifies the returned `EndpointUpdate` against the target's public key from the requester's OWN `MembershipCertificate` copy — never trusts the host — then upserts to `locator_store` and attempts a connection (reuses 44.3's `_connect_to_link_endpoint`). `_register_with_rendezvous_hosts()` fires alongside `_send_self_endpoint_update()` on every `hello`/`hello_ack` and on 45.1's IP-change re-announce, sending a `rendezvous_register` for every group this device actively belongs to. Also fixed in passing: 45.2 had added the three `make_rendezvous_*` factories to `core/protocol/messages.py` but never exported them through `core/protocol/__init__.py` or the root `protocol.py` shim — caught by this sub-step's own tests failing with `AttributeError`. 19 new tests (`tests/test_rendezvous_ui.py`). **Phase 45 complete** |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -188,11 +189,12 @@ new design work before any code, resolved with Baim as follows:
   the same non-guarantee already documented for §8 "Simultaneous
   Offline IP Change", not a new one.
 
-Sub-steps: 45.1 (own-IP-change detection + re-announce to connected
-peers, no rendezvous relay involved yet) → 45.2 (`RendezvousCache` +
-the three wire messages) → 45.3 (`/group rendezvous <group_id> on|off`
-+ wiring the IP-change trigger to push through rendezvous-mode peers
-too, for the case where the target isn't currently connected).
+Sub-steps (all landed): 45.1 (own-IP-change detection + re-announce to
+connected peers, `1.18.6`) → 45.2 (`RendezvousCache` + the three wire
+messages, `1.18.7`) → 45.3 (`/group rendezvous <group_id> on|off|find`
++ wiring the IP-change trigger to push registrations through
+rendezvous-mode peers too, for the case where the target isn't
+currently connected, `1.18.8`).
 
 ## Next up (recommended order)
 
@@ -200,8 +202,8 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. **Phase 45 — Rendezvous** (in progress, opt-in per-group design resolved with Baim since the original doc was architecture-only — see "Phase 45 design (resolved)" below: 45.1 own-IP-change detection landed as `1.18.6`; 45.2 `RendezvousCache`+wire messages landed as `1.18.7`; 45.3 `/group rendezvous on|off` still to come) ← next
-2. Phase 46 — NAT Traversal & Relay (optional, design-complete)
+1. **Phase 45 — Rendezvous** (complete: opt-in per-group design resolved with Baim since the original doc was architecture-only — see "Phase 45 design (resolved)" below: 45.1 own-IP-change detection as `1.18.6`, 45.2 `RendezvousCache`+wire messages as `1.18.7`, 45.3 `ui.py` wiring as `1.18.8`)
+2. Phase 46 — NAT Traversal & Relay (optional, design-complete) ← next
 3. Phase 36/37 — UI/security UX
 4. Phase 28-35 — logging, performance, concurrency, state machines,
    error protocol

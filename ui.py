@@ -35,6 +35,7 @@ Cursor & Mouse:
 import asyncio
 import base64
 import os
+import dataclasses
 import secrets
 import socket
 import shutil
@@ -111,6 +112,8 @@ from core.connectivity import (
     LinkSignatureError,
     Locator,
     LocatorStore,
+    RendezvousCache,
+    RendezvousError,
     WrongPinError,
     create_link,
     decode_link,
@@ -759,6 +762,11 @@ class ChatApp(App):
         # in-memory-only regardless, so there's nothing to lock/unlock.
         self._endpoint_nonce_cache = NonceCache()
         self._last_known_local_ips: set = set()  # Phase 45.1, set for real in _setup()
+        # Phase 45.2/45.3: rendezvous host state. Both in-memory only,
+        # never persisted — a restart means re-opting-in and
+        # re-registering, matching "Rendezvous bukan data server".
+        self.rendezvous_cache = RendezvousCache(nonce_cache=self._endpoint_nonce_cache)
+        self._rendezvous_active_groups: set = set()
         self.vault_db = None  # VaultDatabase, set in on_mount (Phase 39.2)
         self.vault_persistence = None  # VaultPersistence, set in on_mount (Phase 39.2)
         self.vault_session = None  # VaultSession, set in on_mount (Phase 39.3)
@@ -1393,6 +1401,8 @@ class ChatApp(App):
             await self._handle_group_req_export(rest, extra)
         elif subcmd in ("caps", "capabilities"):
             await self._handle_group_caps(rest, extra)
+        elif subcmd == "rendezvous":
+            await self._handle_group_rendezvous(rest, extra)
         else:
             self._log(f"[yellow]Unknown group subcommand: '{subcmd}'. Type /help for usage.[/yellow]")
 
@@ -2712,6 +2722,7 @@ class ChatApp(App):
                 ack = protocol.make_hello_ack(self.peer_id, self.display_name, UI_TCP_PORT)
                 await self.manager.send(addr_key, ack)
                 await self._send_self_endpoint_update(addr_key)
+                await self._register_with_rendezvous_hosts(addr_key)
         elif msg_type == "hello_ack":
             peer_id = evt.message.get("peer_id", "")
             sender_name = evt.message.get("sender_name", ip)
@@ -2722,8 +2733,15 @@ class ChatApp(App):
                 if self.active_peer_id is None:
                     self.active_peer_id = peer_id
                 await self._send_self_endpoint_update(addr_key)
+                await self._register_with_rendezvous_hosts(addr_key)
         elif msg_type == "endpoint_update":
             await self._on_endpoint_update(addr_key, evt.message)
+        elif msg_type == "rendezvous_register":
+            await self._on_rendezvous_register(addr_key, evt.message)
+        elif msg_type == "rendezvous_lookup":
+            await self._on_rendezvous_lookup(addr_key, evt.message)
+        elif msg_type == "rendezvous_lookup_response":
+            await self._on_rendezvous_lookup_response(addr_key, evt.message)
         elif msg_type == "group_join_request":
             await self._on_group_join_request(addr_key, evt.message)
         elif msg_type == "group_join_response":
@@ -2783,6 +2801,168 @@ class ChatApp(App):
             self._log(f"[cyan]Local address changed — re-announcing to {len(addr_keys)} connected peer(s)...[/cyan]")
         for addr_key in addr_keys:
             await self._send_self_endpoint_update(addr_key)
+            await self._register_with_rendezvous_hosts(addr_key)
+
+    async def _register_with_rendezvous_hosts(self, addr_key: str) -> None:
+        """Phase 45.3: send a rendezvous_register for every group we're an
+        active member of to *addr_key* — regardless of whether that peer
+        is actually hosting for any of those groups. A non-hosting
+        member simply ignores it (see _on_rendezvous_register's gate);
+        this avoids needing a separate "who's hosting" discovery
+        message. Fire-and-forget, best-effort — no response expected.
+        """
+        if self.group_store is None:
+            return
+        my_groups = [
+            g for g in self.group_store.list_groups()
+            if self.group_store.get_membership_status(g.group_id, self.peer_id) == MembershipStatus.ACTIVE
+        ]
+        if not my_groups:
+            return
+        local_ips = discovery.get_network_info().get("local_ips", [])
+        if not local_ips:
+            return
+        try:
+            update = create_endpoint_update(self.my_identity, KIND_DIRECT_V4, local_ips[0], UI_TCP_PORT)
+        except Exception:
+            return
+        eu_dict = dataclasses.asdict(update)
+        for group in my_groups:
+            try:
+                wire = protocol.make_rendezvous_register(group.group_id, eu_dict)
+                await self.manager.send(addr_key, wire)
+            except Exception:
+                pass  # best-effort, see docstring
+
+    async def _on_rendezvous_register(self, addr_key: str, msg: dict) -> None:
+        """Host side of rendezvous_register. Silently does nothing if
+        we're not in rendezvous mode for this group_id (§ the toggle is
+        what makes "opt-in" meaningful — every connected device could
+        otherwise passively accumulate cache entries it never asked
+        to hold) or if authorization/signature checks fail."""
+        group_id = msg.get("group_id")
+        if not group_id or group_id not in self._rendezvous_active_groups or self.group_store is None:
+            return
+        authenticated_id = self.manager.get_peer_device_id(addr_key)
+        sender_public_key = self.manager.get_peer_public_key(addr_key)
+        if authenticated_id is None or sender_public_key is None:
+            return
+        try:
+            update = EndpointUpdate(**msg["endpoint_update"])
+            self.rendezvous_cache.register(
+                group_id=group_id,
+                authenticated_device_id=authenticated_id,
+                update=update,
+                sender_public_key=sender_public_key,
+                group_store=self.group_store,
+            )
+        except (RendezvousError, TypeError, KeyError) as e:
+            self._log(f"[dim]Rendezvous register refused: {e}[/dim]")
+
+    async def _on_rendezvous_lookup(self, addr_key: str, msg: dict) -> None:
+        """Host side of rendezvous_lookup. Same not-hosting gate as
+        _on_rendezvous_register — if we're not in rendezvous mode for
+        this group, we don't even send a response (true silence, not a
+        "nothing found" reply — we're not offering the service at
+        all)."""
+        group_id = msg.get("group_id")
+        target_device_id = msg.get("target_device_id")
+        if not group_id or group_id not in self._rendezvous_active_groups or self.group_store is None:
+            return
+        requester_id = self.manager.get_peer_device_id(addr_key)
+        if requester_id is None:
+            return
+        try:
+            found = self.rendezvous_cache.lookup(
+                group_id=group_id,
+                requester_device_id=requester_id,
+                target_device_id=target_device_id,
+                group_store=self.group_store,
+            )
+        except RendezvousError as e:
+            self._log(f"[dim]Rendezvous lookup refused: {e}[/dim]")
+            return
+        eu_dict = dataclasses.asdict(found) if found is not None else None
+        wire = protocol.make_rendezvous_lookup_response(group_id, target_device_id, eu_dict)
+        await self.manager.send(addr_key, wire)
+
+    async def _on_rendezvous_lookup_response(self, addr_key: str, msg: dict) -> None:
+        """Requester side. The host is a mail carrier, never a
+        vouched-for party — we re-verify the returned EndpointUpdate's
+        signature ourselves, against the target's public key from OUR
+        OWN copy of that group's MembershipCertificate, before trusting
+        or acting on it at all."""
+        eu_dict = msg.get("endpoint_update")
+        if eu_dict is None or self.group_store is None or self.locator_store is None:
+            return
+        group_id = msg.get("group_id")
+        target_device_id = msg.get("target_device_id")
+        membership = self.group_store.get_membership(group_id, target_device_id)
+        if membership is None:
+            return  # we don't have this target's key on file — can't verify, so don't trust it
+        try:
+            update = EndpointUpdate(**eu_dict)
+            target_public_key = base64.b64decode(membership.device_public_key)
+        except (TypeError, KeyError, ValueError):
+            return
+        if update.device_id != target_device_id:
+            return  # host relayed something for the wrong target — refuse
+        if not verify_endpoint_update(update, target_public_key, self._endpoint_nonce_cache):
+            return
+        endpoint = Endpoint(device_id=update.device_id, kind=update.kind, host=update.host, port=update.port, updated_at=update.timestamp)
+        try:
+            self.locator_store.upsert_endpoint(endpoint)
+        except Exception:
+            pass
+        self._log(
+            f"[cyan]Rendezvous found {target_device_id[:8]}... at {update.host}:{update.port} — "
+            f"attempting connection...[/cyan]"
+        )
+        await self._connect_to_link_endpoint(target_device_id, endpoint)
+
+    async def _handle_group_rendezvous(self, group_id: str, extra: str) -> None:
+        """/group rendezvous <group_id> on|off|find <device_id>"""
+        if not group_id:
+            self._log("[yellow]Usage: /group rendezvous <group_id> on|off|find <device_id>[/yellow]")
+            return
+        if self.group_store.get_group(group_id) is None:
+            self._log(f"[red]Unknown group_id: {group_id}[/red]")
+            return
+
+        parts = extra.split(maxsplit=1)
+        mode = parts[0].lower() if parts else ""
+
+        if mode == "on":
+            if self.group_store.get_membership_status(group_id, self.peer_id) != MembershipStatus.ACTIVE:
+                self._log("[red]You must be an active member of this group to host rendezvous for it.[/red]")
+                return
+            self._rendezvous_active_groups.add(group_id)
+            self._log(f"[green]Rendezvous mode ON for group {group_id[:8]}... — relaying group-mates' endpoints.[/green]")
+        elif mode == "off":
+            self._rendezvous_active_groups.discard(group_id)
+            evicted = self.rendezvous_cache.evict_all_for_group(group_id)
+            self._log(f"[yellow]Rendezvous mode OFF for group {group_id[:8]}... ({evicted} cached entr{'y' if evicted == 1 else 'ies'} cleared).[/yellow]")
+        elif mode == "find":
+            target_device_id = parts[1].strip() if len(parts) > 1 else ""
+            if not target_device_id:
+                self._log("[yellow]Usage: /group rendezvous <group_id> find <device_id>[/yellow]")
+                return
+            if self.group_store.get_membership_status(group_id, self.peer_id) != MembershipStatus.ACTIVE:
+                self._log("[red]You must be an active member of this group to look someone up in it.[/red]")
+                return
+            addr_keys = self.manager.list_connected_addr_keys()
+            if not addr_keys:
+                self._log("[red]Not connected to any peer right now — nobody to ask.[/red]")
+                return
+            wire = protocol.make_rendezvous_lookup(group_id, target_device_id)
+            for addr_key in addr_keys:
+                try:
+                    await self.manager.send(addr_key, wire)
+                except Exception:
+                    pass
+            self._log(f"[cyan]Asked {len(addr_keys)} connected peer(s) about {target_device_id[:8]}...[/cyan]")
+        else:
+            self._log("[yellow]Usage: /group rendezvous <group_id> on|off|find <device_id>[/yellow]")
 
     async def _send_self_endpoint_update(self, addr_key: str) -> None:
         """Phase 44.4: right after a hello/hello_ack handshake completes,
@@ -3033,6 +3213,8 @@ class ChatApp(App):
             self._log(" [bold cyan]/group req-export <id> <fid>[/bold cyan] Request admin authorization to export file")
             self._log(" [bold cyan]/group authorize-export <id> <dev>[/bold cyan] (Admin) Authorize device file export")
             self._log(" [bold cyan]/group caps [id][/bold cyan]         List active export capabilities")
+            self._log(" [bold cyan]/group rendezvous <id> on|off[/bold cyan] Host endpoint relay for a group")
+            self._log(" [bold cyan]/group rendezvous <id> find <dev>[/bold cyan] Ask connected group-mates where <dev> is")
             self._log("[dim cyan]────────────────────────────────────────────────────────[/dim cyan]")
             self._log(" [bold cyan]/quit[/bold cyan] or [bold cyan]/exit[/bold cyan]          Exit application")
             self._log("[bold yellow]╚═══════════════════════ Shortcuts ══════════════════════╝[/bold yellow]")
