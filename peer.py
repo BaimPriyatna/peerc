@@ -377,6 +377,18 @@ class ConnectionManager:
         mid-loop (e.g. Phase 44.4/45.1's re-announce-on-IP-change)."""
         return list(self._connections.keys())
 
+    def find_addr_key_for_device(self, device_id: str) -> Optional[str]:
+        """Reverse of get_peer_device_id(): the addr_key of an
+        already-connected session whose authenticated peer is
+        device_id, or None if not currently connected to it (Phase
+        46.2 needs this — "am I, R, already connected to the relay
+        target?"). O(n) in connection count; nothing so far has needed
+        this lookup often enough to warrant a second index."""
+        for addr_key, session in self._connections.items():
+            if session.peer_device_id == device_id:
+                return addr_key
+        return None
+
     def get_peer_device_id(self, addr_key: str) -> Optional[str]:
         """The cryptographically authenticated device_id of the peer at
         addr_key, or None if not connected. Unlike a message's own

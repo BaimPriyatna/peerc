@@ -273,9 +273,20 @@ Sub-steps (see `CHANGELOG.md` for full detail on each):
   `tests/test_relay_pipe.py` with a full, unmodified Phase 6 handshake
   running through a relay tunnel. Not yet wired to anything that decides
   *when* to open a pipe or tunnel — that's 46.2/46.3.
-- **46.2 (next)** — `relay_request`/accept/reject wire messages and R's
-  authorization check (group membership + already connected to the
-  target), calling 46.1's `open_relay_pipe()` once authorized.
+- **46.2 (`1.19.1`, done)** — `relay_request`/`relay_response` wire
+  messages (one response type with a boolean `accepted` field, mirroring
+  `rendezvous_lookup_response`'s nullable-field shape) and R's
+  authorization check in `core/connectivity/relay.py`
+  (`authorize_relay_request()`: relay mode on for the group, requester
+  is an active member, R already connected to the target — in that
+  order), wired into `ui.py`'s `_on_relay_request`/`_on_relay_response`
+  and calling 46.1's `open_relay_pipe()` on the happy path. Not-hosting
+  and not-a-member stay silent (no reply at all); "not connected to the
+  target" gets an explicit `accepted=False` — see
+  `core/connectivity/relay.py`'s docstring for why that one case
+  differs. Nothing sends a `relay_request` yet (that's 46.3), and there's
+  no `/group relay on|off` command yet (46.4) — `_relay_active_groups`
+  has to be populated directly until then.
 - **46.3** — A-side orchestration: try direct via `connect_to` with a
   short timeout, on failure discover Relay-mode candidates and try them
   sequentially, using 46.1's `open_relay_tunnel()` once a relay accepts.
@@ -291,8 +302,9 @@ numeric phase order in the plan doc:
 1. **Phase 45 — Rendezvous** (complete: opt-in per-group design resolved with Baim since the original doc was architecture-only — see "Phase 45 design (resolved)" below: 45.1 own-IP-change detection as `1.18.6`, 45.2 `RendezvousCache`+wire messages as `1.18.7`, 45.3 `ui.py` wiring as `1.18.8`)
 2. Phase 46 — NAT Traversal & Relay (optional; design resolved with
    Baim — see "Phase 46 design (resolved)" above; 46.1 (relay-tunnel
-   primitive) done as `1.19.0`, 46.2 (relay_request wire protocol +
-   R-side authorization) next) ← next
+   primitive, `1.19.0`) and 46.2 (relay_request wire protocol + R-side
+   authorization, `1.19.1`) done, 46.3 (A-side direct-then-relay
+   orchestration) next) ← next
 3. Phase 36/37 — UI/security UX
 4. Phase 28-35 — logging, performance, concurrency, state machines,
    error protocol

@@ -20,6 +20,14 @@
                           active group member can relay already-signed
                           EndpointUpdates. No new crypto — host relays, requester
                           re-verifies.
+    relay.py            — Phase 46.2: authorize_relay_request(), pure
+                          authorization logic for the relay_request wire
+                          message. Opt-in per-group via a separate toggle
+                          from Rendezvous (Phase 46.4); R bridges two
+                          already-connected sessions it never chains
+                          through a second relay. See
+                          core/transport/relay_stream.py (46.1) for the
+                          actual byte-tunnel mechanism this authorizes.
 """
 
 from .endpoint_update import (
@@ -62,6 +70,13 @@ from .rendezvous import (
     RendezvousError,
     RendezvousSignatureError,
 )
+from .relay import (
+    RelayAuthError,
+    RelayError,
+    RelayNotHostingError,
+    RelayTargetUnreachableError,
+    authorize_relay_request,
+)
 
 __all__ = [
     "DEFAULT_STALE_SECONDS",
@@ -101,4 +116,10 @@ __all__ = [
     "RendezvousAuthError",
     "RendezvousSignatureError",
     "RendezvousDeviceIdMismatchError",
+    # Phase 46.2: Relay authorization
+    "authorize_relay_request",
+    "RelayError",
+    "RelayAuthError",
+    "RelayNotHostingError",
+    "RelayTargetUnreachableError",
 ]

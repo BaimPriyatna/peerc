@@ -463,6 +463,48 @@ def make_rendezvous_lookup_response(
     }
 
 
+def make_relay_request(group_id: str, target_device_id: str) -> dict:
+    """Phase 46.2: sent by A to a group-mate R it believes is in Relay
+    mode, asking R to bridge a connection to target_device_id. See
+    core/connectivity/relay.py's authorize_relay_request() for what R
+    checks before opening a pipe (Phase 46.1's
+    ConnectionManager.open_relay_pipe())."""
+    return {
+        "type": "relay_request",
+        "version": PROTOCOL_VERSION,
+        "group_id": group_id,
+        "target_device_id": target_device_id,
+        "timestamp": time.time(),
+    }
+
+
+def make_relay_response(group_id: str, target_device_id: str, accepted: bool) -> dict:
+    """Phase 46.2: R's reply to a relay_request.
+
+    *accepted=True* means R has already opened the pipe — A may now
+    open a relay tunnel through this same session
+    (ConnectionManager.open_relay_tunnel(), Phase 46.1) and start the
+    Phase 6 handshake with target_device_id over it (Phase 46.3).
+
+    Mirrors rendezvous_lookup_response's nullable-field shape rather
+    than being two separate message types: not-hosting and not-a-member
+    stay silent (no response at all, same posture as
+    _on_rendezvous_lookup's auth-failure gate) — accepted=False is only
+    ever sent for the one non-sensitive, "legitimate query with a
+    negative answer" case, R is not currently connected to the target
+    (the relay equivalent of rendezvous_lookup_response's
+    endpoint_update=None).
+    """
+    return {
+        "type": "relay_response",
+        "version": PROTOCOL_VERSION,
+        "group_id": group_id,
+        "target_device_id": target_device_id,
+        "accepted": accepted,
+        "timestamp": time.time(),
+    }
+
+
 # ---- Schema validation --------------------------------------------------
 #
 # read_frame() only guarantees "valid JSON". It does NOT guarantee the
@@ -513,6 +555,8 @@ REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "rendezvous_register": ("group_id", "endpoint_update", "timestamp"),
     "rendezvous_lookup": ("group_id", "target_device_id", "timestamp"),
     "rendezvous_lookup_response": ("group_id", "target_device_id", "endpoint_update", "timestamp"),
+    "relay_request": ("group_id", "target_device_id", "timestamp"),
+    "relay_response": ("group_id", "target_device_id", "accepted", "timestamp"),
     "error": ("code", "message"),
 }
 
@@ -686,6 +730,24 @@ def validate_message(message) -> dict:
                     "rendezvous_lookup_response.endpoint_update must be an object or null"
                 )
             _validate_endpoint_update_dict(eu, parent="rendezvous_lookup_response.endpoint_update")
+
+    if msg_type == "relay_request":
+        gid = message["group_id"]
+        if not isinstance(gid, str) or not gid:
+            raise ProtocolError("relay_request.group_id must be a non-empty string")
+        tid = message["target_device_id"]
+        if not isinstance(tid, str) or not tid:
+            raise ProtocolError("relay_request.target_device_id must be a non-empty string")
+
+    if msg_type == "relay_response":
+        gid = message["group_id"]
+        if not isinstance(gid, str) or not gid:
+            raise ProtocolError("relay_response.group_id must be a non-empty string")
+        tid = message["target_device_id"]
+        if not isinstance(tid, str) or not tid:
+            raise ProtocolError("relay_response.target_device_id must be a non-empty string")
+        if not isinstance(message["accepted"], bool):
+            raise ProtocolError("relay_response.accepted must be a boolean")
 
     return message
 

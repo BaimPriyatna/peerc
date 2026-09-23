@@ -112,9 +112,12 @@ from core.connectivity import (
     LinkSignatureError,
     Locator,
     LocatorStore,
+    RelayError,
+    RelayTargetUnreachableError,
     RendezvousCache,
     RendezvousError,
     WrongPinError,
+    authorize_relay_request,
     create_link,
     decode_link,
 )
@@ -767,6 +770,13 @@ class ChatApp(App):
         # re-registering, matching "Rendezvous bukan data server".
         self.rendezvous_cache = RendezvousCache(nonce_cache=self._endpoint_nonce_cache)
         self._rendezvous_active_groups: set = set()
+        # Phase 46.2/46.4: relay host state — separate toggle from
+        # Rendezvous (relaying carries live bandwidth traffic, a
+        # heavier commitment than caching an EndpointUpdate blob).
+        # In-memory only, same reasoning as rendezvous above. The
+        # /group relay on|off command that populates this is Phase
+        # 46.4; this set already gates _on_relay_request as of 46.2.
+        self._relay_active_groups: set = set()
         self.vault_db = None  # VaultDatabase, set in on_mount (Phase 39.2)
         self.vault_persistence = None  # VaultPersistence, set in on_mount (Phase 39.2)
         self.vault_session = None  # VaultSession, set in on_mount (Phase 39.3)
@@ -2742,6 +2752,10 @@ class ChatApp(App):
             await self._on_rendezvous_lookup(addr_key, evt.message)
         elif msg_type == "rendezvous_lookup_response":
             await self._on_rendezvous_lookup_response(addr_key, evt.message)
+        elif msg_type == "relay_request":
+            await self._on_relay_request(addr_key, evt.message)
+        elif msg_type == "relay_response":
+            await self._on_relay_response(addr_key, evt.message)
         elif msg_type == "group_join_request":
             await self._on_group_join_request(addr_key, evt.message)
         elif msg_type == "group_join_response":
@@ -2919,6 +2933,66 @@ class ChatApp(App):
             f"attempting connection...[/cyan]"
         )
         await self._connect_to_link_endpoint(target_device_id, endpoint)
+
+    async def _on_relay_request(self, addr_key: str, msg: dict) -> None:
+        """Host (R) side of relay_request (Phase 46.2). Silent — no
+        reply at all — when relay mode isn't on for this group or the
+        requester isn't an active member, same posture as
+        _on_rendezvous_lookup's auth-failure gate. A reply IS sent when
+        authorization passes but we're simply not connected to the
+        target right now — see core/connectivity/relay.py's docstring
+        for why that case is different."""
+        group_id = msg.get("group_id")
+        target_device_id = msg.get("target_device_id")
+        if not group_id or not target_device_id or self.group_store is None:
+            return
+        requester_id = self.manager.get_peer_device_id(addr_key)
+        if requester_id is None:
+            return
+        target_addr_key = self.manager.find_addr_key_for_device(target_device_id)
+        try:
+            authorize_relay_request(
+                group_id=group_id,
+                requester_device_id=requester_id,
+                relay_active_groups=self._relay_active_groups,
+                group_store=self.group_store,
+                is_target_connected=target_addr_key is not None,
+            )
+        except RelayTargetUnreachableError as e:
+            self._log(f"[dim]Relay request: {e}[/dim]")
+            wire = protocol.make_relay_response(group_id, target_device_id, accepted=False)
+            await self.manager.send(addr_key, wire)
+            return
+        except RelayError as e:
+            self._log(f"[dim]Relay request refused: {e}[/dim]")
+            return  # silent — no reply, same posture as rendezvous auth failures
+
+        self.manager.open_relay_pipe(addr_key, target_addr_key)
+        self._log(
+            f"[cyan]Relaying {requester_id[:8]}... <-> {target_device_id[:8]}... "
+            f"(group {group_id[:8]}...)[/cyan]"
+        )
+        wire = protocol.make_relay_response(group_id, target_device_id, accepted=True)
+        await self.manager.send(addr_key, wire)
+
+    async def _on_relay_response(self, addr_key: str, msg: dict) -> None:
+        """Requester (A) side of relay_response (Phase 46.2). Actually
+        opening a relay tunnel and running the Phase 6 handshake with
+        the target over it is Phase 46.3's direct-then-relay
+        orchestration — this just surfaces the outcome for now."""
+        group_id = msg.get("group_id")
+        target_device_id = msg.get("target_device_id")
+        accepted = msg.get("accepted")
+        if accepted:
+            self._log(
+                f"[cyan]Relay accepted by {addr_key} for "
+                f"{(target_device_id or '')[:8]}... (group {(group_id or '')[:8]}...)[/cyan]"
+            )
+        else:
+            self._log(
+                f"[dim]Relay declined by {addr_key} for "
+                f"{(target_device_id or '')[:8]}... (not connected to target)[/dim]"
+            )
 
     async def _handle_group_rendezvous(self, group_id: str, extra: str) -> None:
         """/group rendezvous <group_id> on|off|find <device_id>"""

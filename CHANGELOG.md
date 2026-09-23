@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.19.1] — Phase 46.2: relay_request wire protocol + R-side authorization
+
+### Added
+- **`core/protocol/messages.py`**: `make_relay_request(group_id, target_device_id)` (A → R) and `make_relay_response(group_id, target_device_id, accepted)` (R → A), plus `REQUIRED_FIELDS`/`validate_message()` coverage for both. One response type with a boolean `accepted` field, mirroring `rendezvous_lookup_response`'s nullable-field shape, rather than two separate accept/reject message types.
+- **`core/connectivity/relay.py`** [NEW]: `authorize_relay_request()` — pure authorization logic, no network I/O, same shape as `core/connectivity/rendezvous.py`. Checks, in order: relay mode is on for the group on this device (`RelayNotHostingError`), the requester is an active member (`RelayAuthError`), and this device is already connected to the target (`RelayTargetUnreachableError`). The first two stay silent at the ui.py layer — same posture as `_on_rendezvous_lookup`'s auth-failure gate — while the third gets an explicit `relay_response(accepted=False)`, since "not currently connected to the target" is the ordinary, non-sensitive "legitimate query, negative answer" case (mirrors `rendezvous_lookup_response`'s `endpoint_update=None`), and an explicit fast reply matters for 46.3's sequential candidate trial.
+- **`peer.py`**: `ConnectionManager.find_addr_key_for_device(device_id)` — reverse of `get_peer_device_id()`, needed for R to check "am I already connected to the relay target?".
+- **`ui.py`**: `self._relay_active_groups` state (separate from `_rendezvous_active_groups`, per the Phase 46 design's separate-toggle decision — the toggle command itself is 46.4); `_on_relay_request`/`_on_relay_response` handlers wired into the message dispatch. `_on_relay_request`'s happy path calls 46.1's `ConnectionManager.open_relay_pipe()` directly. `_on_relay_response` currently just surfaces the outcome — actually opening a tunnel and running the handshake with the target is 46.3.
+- 19 new tests: `tests/test_relay_authorization.py` (pure `authorize_relay_request()` logic + wire message validation, including check-ordering) and `tests/test_relay_ui.py` (ui.py plumbing: silent gates, the explicit decline reply, `open_relay_pipe()` wiring on the happy path).
+
+### Not yet done (46.3-46.4)
+- No A-side direct-then-relay orchestration — nothing sends a `relay_request` yet, and `_on_relay_response`'s accept path doesn't open a tunnel or start a handshake.
+- No `/group relay <id> on|off` command — `_relay_active_groups` has to be populated directly (as the tests do) until 46.4 adds it.
+
 ## [1.19.0] — Phase 46.1: relay-tunnel primitive
 
 ### Added
