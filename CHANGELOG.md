@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.19.0] — Phase 46.1: relay-tunnel primitive
+
+### Added
+- **Phase 46 design resolved with Baim** before any code — `INTERNET_CONNECTIVITY_DESIGN.md` §11 "Optional Relay" was 6 lines, architecture-only. Landed: no active hole-punching (try direct via `ConnectionManager.connect_to` with a short timeout, fall straight back to relay), relay authorization opt-in per-group via a separate toggle from Rendezvous (`/group relay <id> on|off`, Phase 46.4), relay-candidate discovery reusing `rendezvous_lookup` with sequential trial across candidates, and a pure-byte relay protocol where B is passive and the pipe at R lives exactly as long as both its legs do. Full writeup: `docs/ROADMAP.md`'s new "Phase 46 design (resolved)" section.
+- **`core/transport/secure.py`**: a third inner payload marker, `TYPE_RELAY` (`b"R"`), alongside the existing `TYPE_JSON`/`TYPE_BINARY` — `EncryptedTransport.send_relay()`/`receive_frame()`'s `"relay"` kind. Kept fully separate from `TYPE_BINARY` (file_data) so a relayed chunk can never collide with `decode_file_data`'s fixed-header framing; zero base64 tax, since it rides the same raw-bytes wire path file_data already uses.
+- **`core/transport/session.py`**: `SecureSession.send_relay()`, mirroring `send_binary()`.
+- **`core/transport/relay_stream.py`** [NEW]: `RelayedStreamReader`/`RelayedStreamWriter` — a duck-typed `asyncio.StreamReader`/`StreamWriter` pair (just the `readexactly()` / `write()`+`drain()`+`get_extra_info()`+`is_closing()`+`close()`+`wait_closed()` surface `core/protocol/frame.py`, `core/transport/tcp.py`, and `core/crypto/handshake.py` actually use) backed by `relay` chunks instead of a real socket. Wrapped in a plain `TCPConnection`, this lets `perform_handshake_initiator`/`_responder` and `SecureSession`/`EncryptedTransport` run completely unmodified over a relayed connection — see the new tests for a full Phase 6 handshake proving it end-to-end.
+- **`peer.py`**: `ConnectionManager.send_relay_data()`; R-side `open_relay_pipe()`/`close_relay_pipe()`/`is_relay_pipe_open()` (bidirectional forwarding table between two already-connected sessions — R never parses a relayed chunk, just re-sends it on the paired session); A/B-side `register_relay_tunnel()`/`unregister_relay_tunnel()`/`open_relay_tunnel()` (builds a ready-to-use tunneled `TCPConnection`). `_read_loop` dispatches `"relay"` frames to whichever applies (forward if I'm R, feed a registered tunnel reader if I'm A/B, else drop) — never through `on_message`/`NetworkMessageReceived`, since the content is opaque at this layer. Pipe and tunnel-reader entries are cleaned up automatically in `_read_loop`'s `finally` when either leg's session closes (pipe lifecycle decision: closes the moment either A↔R or B↔R disconnects).
+- 7 new tests (`tests/test_relay_pipe.py`): the shim in isolation (multi-chunk `readexactly()`, blocking-until-fed, EOF → `IncompleteReadError`, writer `get_extra_info`/close); the wire-level `relay` channel between two handshaked managers; R-side forwarding with an explicit assertion that R's own `on_message` is never called; pipe teardown on leg disconnect; and the full payoff — a real Phase 6 handshake plus one encrypted chat message between two peers, running entirely through a relay tunnel.
+
+### Not yet done (46.2-46.4)
+- No `relay_request`/accept/reject negotiation or R-side authorization check yet — `open_relay_pipe()` has to be called directly; nothing decides when it's safe to.
+- No A-side direct-then-relay orchestration (46.3) or `/group relay on|off` toggle (46.4) yet.
+- No explicit "far leg died mid-tunnel" signal forwarded through R — if R's pipe drops out from under a live tunnel (as opposed to A's or B's own leg dying, which the tunnel notices directly), the stalled side currently only recovers via existing handshake/idle timeouts. Revisit in 46.2 if that proves insufficient.
+
 ## [1.18.8] — Phase 45.3: rendezvous wired into ui.py — Phase 45 complete
 
 ### Added

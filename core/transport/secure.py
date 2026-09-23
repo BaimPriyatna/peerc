@@ -21,6 +21,9 @@ from .timeout import ConnectionClosedError, TransportError
 # Inner payload type markers (encrypted inside the AEAD frame)
 TYPE_JSON = b"J"
 TYPE_BINARY = b"B"
+TYPE_RELAY = b"R"  # Phase 46.1: opaque relay-tunnel bytes, kept fully
+                    # separate from TYPE_BINARY (file_data) so relayed
+                    # traffic never touches decode_file_data's framing.
 
 SEQUENCE_FORMAT = ">Q"
 SEQUENCE_SIZE = struct.calcsize(SEQUENCE_FORMAT)  # 8 bytes
@@ -61,6 +64,20 @@ class EncryptedTransport:
             raise TransportError(f"Expected bytes payload, got {type(payload).__name__}")
 
         inner_payload = TYPE_BINARY + bytes(payload)
+        await self._send_encrypted(inner_payload, associated_data=associated_data)
+
+    async def send_relay(self, payload: bytes, associated_data: bytes = b"") -> None:
+        """Encrypt and send an opaque relay-tunnel chunk (Phase 46.1).
+
+        Same wire mechanics as send_binary — just a distinct inner marker
+        so the receiving end's dispatch (peer.py's _read_loop) can tell a
+        relay-tunnel chunk apart from a file_data chunk without either
+        one having to inspect the other's payload shape.
+        """
+        if not isinstance(payload, (bytes, bytearray)):
+            raise TransportError(f"Expected bytes payload, got {type(payload).__name__}")
+
+        inner_payload = TYPE_RELAY + bytes(payload)
         await self._send_encrypted(inner_payload, associated_data=associated_data)
 
     async def _send_encrypted(self, inner_payload: bytes, associated_data: bytes = b"") -> None:
@@ -127,6 +144,8 @@ class EncryptedTransport:
                 raise TransportError(f"Decrypted JSON frame malformed: {e}") from e
         elif marker == TYPE_BINARY:
             return "binary", body
+        elif marker == TYPE_RELAY:
+            return "relay", body
         else:
             return "raw", plaintext
 

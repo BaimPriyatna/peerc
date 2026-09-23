@@ -16,8 +16,10 @@ from .secure import (
     SEQUENCE_SIZE,
     TYPE_BINARY,
     TYPE_JSON,
+    TYPE_RELAY,
     EncryptedTransport,
 )
+from .relay_stream import RelayedStreamReader, RelayedStreamWriter
 from .session import (
     SecureSession,
     SecureSessionManager,
@@ -56,6 +58,9 @@ __all__ = [
     "open_tcp_connection",
     "TYPE_JSON",
     "TYPE_BINARY",
+    "TYPE_RELAY",
+    "RelayedStreamReader",
+    "RelayedStreamWriter",
     "SEQUENCE_FORMAT",
     "SEQUENCE_SIZE",
     "MIN_ENCRYPTED_PAYLOAD_LEN",

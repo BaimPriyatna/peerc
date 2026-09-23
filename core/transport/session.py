@@ -91,11 +91,22 @@ class SecureSession:
         self.last_activity = time.time()
         await self.transport.send_binary(payload)
 
+    async def send_relay(self, payload: bytes) -> None:
+        """Send an opaque relay-tunnel chunk securely to the peer (Phase 46.1).
+
+        Distinct wire marker from send_binary — see
+        core/transport/secure.py's TYPE_RELAY for why.
+        """
+        self.last_activity = time.time()
+        await self.transport.send_relay(payload)
+
     async def receive(self) -> Tuple[str, Union[dict, bytes]]:
         """Receive the next authenticated and decrypted frame from the peer.
 
         Returns:
-            ("json", dict) for control messages or ("binary", bytes) for binary chunks.
+            ("json", dict) for control messages, ("binary", bytes) for
+            binary chunks, or ("relay", bytes) for an opaque relay-tunnel
+            chunk (Phase 46.1).
         """
         result = await self.transport.receive_frame()
         self.last_activity = time.time()

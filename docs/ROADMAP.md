@@ -225,11 +225,30 @@ Resolved with Baim as follows:
   itself is already Phase 6-authenticated, same trust basis as every
   other in-band command). R checks that A is an active member of the
   shared group and that R already has a live connection to B — R never
-  searches for B itself, and never chains through a second relay. If
-  both hold, R becomes a pure byte-pipe: raw bytes from A go to B and
-  back, unparsed — R does not decode the peerc protocol inside the pipe
-  at all. The Phase 6 handshake between A and B runs end-to-end through
-  that pipe, identical to a direct connection.
+  searches for B itself, and never chains through a second relay.
+
+  Mechanism: R's sessions with A and with B are each their own
+  independently-keyed `SecureSession` (separate ChaCha20-Poly1305 keys
+  from R's own handshake with each), so there is no single "A-B
+  connection" R can splice directly. Instead R relays opaque bytes one
+  hop-encryption layer up: a new binary wire message, `relay_data`,
+  carries A-B's traffic as payload — whatever `relay_data` bytes arrive
+  on R's session with one side are forwarded verbatim as `relay_data` on
+  R's session with the other (`session.send_binary(payload)`), with no
+  parsing at all. On A's and B's side, a small duck-typed
+  reader/writer shim (satisfying just the `readexactly()` /
+  `write()`+`drain()` surface `core/protocol/frame.py` and
+  `core/crypto/handshake.py` need) packs outgoing bytes into
+  `relay_data` messages sent over their real session with R, and unpacks
+  incoming ones back into a byte stream. That shim is the only new
+  primitive: `perform_handshake_initiator`/`_responder` and
+  `SecureSession`/`EncryptedTransport` run over it completely
+  unmodified, so the Phase 6 handshake between A and B — and everything
+  after it — runs end-to-end through the tunnel exactly as it would over
+  a direct TCP connection. B's incoming side needs one structural
+  addition: a virtual-incoming-connection path triggered by relay
+  negotiation from R (parallel to `_handle_incoming`'s real-socket-accept
+  path), since a relayed connection never touches B's actual TCP server.
 - **B is passive.** B is not notified or asked to approve being
   relayed — the pipe carries the same end-to-end-encrypted,
   end-to-end-authenticated traffic B would see on a direct connection,
@@ -243,13 +262,25 @@ Resolved with Baim as follows:
   `rendezvous_lookup` machinery rather than inventing a second discovery
   mechanism.
 
-Needs one genuinely new primitive beyond what Rendezvous already has: a
-"pipe" mode in `peer.py`/`core/transport/` that forwards raw bytes
-between two sockets, bypassing the normal decode-message pipeline.
-Everything else — group membership checks, session authentication, the
-connect-with-timeout pattern — reuses existing machinery.
-
-Sub-steps: not yet started.
+Sub-steps (see `CHANGELOG.md` for full detail on each):
+- **46.1 (`1.19.0`, done)** — the relay-tunnel primitive itself: a third
+  `EncryptedTransport` inner marker (`TYPE_RELAY`) so relayed bytes never
+  collide with file_data's binary channel; `core/transport/relay_stream.py`'s
+  `RelayedStreamReader`/`RelayedStreamWriter` shim; and
+  `ConnectionManager`'s R-side forwarding table (`open_relay_pipe`/
+  `close_relay_pipe`) plus A/B-side tunnel registration
+  (`register_relay_tunnel`/`open_relay_tunnel`). Proven end-to-end in
+  `tests/test_relay_pipe.py` with a full, unmodified Phase 6 handshake
+  running through a relay tunnel. Not yet wired to anything that decides
+  *when* to open a pipe or tunnel — that's 46.2/46.3.
+- **46.2 (next)** — `relay_request`/accept/reject wire messages and R's
+  authorization check (group membership + already connected to the
+  target), calling 46.1's `open_relay_pipe()` once authorized.
+- **46.3** — A-side orchestration: try direct via `connect_to` with a
+  short timeout, on failure discover Relay-mode candidates and try them
+  sequentially, using 46.1's `open_relay_tunnel()` once a relay accepts.
+- **46.4** — `/group relay <id> on|off` toggle and wiring it to gate
+  whether 46.2's authorization check can ever say yes.
 
 ## Next up (recommended order)
 
@@ -259,7 +290,9 @@ numeric phase order in the plan doc:
 
 1. **Phase 45 — Rendezvous** (complete: opt-in per-group design resolved with Baim since the original doc was architecture-only — see "Phase 45 design (resolved)" below: 45.1 own-IP-change detection as `1.18.6`, 45.2 `RendezvousCache`+wire messages as `1.18.7`, 45.3 `ui.py` wiring as `1.18.8`)
 2. Phase 46 — NAT Traversal & Relay (optional; design resolved with
-   Baim — see "Phase 46 design (resolved)" above, ready to implement) ← next
+   Baim — see "Phase 46 design (resolved)" above; 46.1 (relay-tunnel
+   primitive) done as `1.19.0`, 46.2 (relay_request wire protocol +
+   R-side authorization) next) ← next
 3. Phase 36/37 — UI/security UX
 4. Phase 28-35 — logging, performance, concurrency, state machines,
    error protocol

@@ -34,7 +34,10 @@ import protocol
 from core.crypto.handshake import HandshakeError
 from core.identity.device_identity import DeviceKeypair
 from core.transport import (
+    RelayedStreamReader,
+    RelayedStreamWriter,
     SecureSession,
+    TCPConnection,
     accept_secure_session,
     initiate_secure_session,
 )
@@ -82,6 +85,16 @@ class ConnectionManager:
         self.trust_store = trust_store
         self._connections: dict[str, SecureSession] = {}
         self._server: Optional[asyncio.base_events.Server] = None
+        # Phase 46.1: relay-tunnel plumbing. Both dicts are keyed by the
+        # addr_key of a real, already-established session — never by a
+        # virtual A-B connection, since that one never has a real socket.
+        #
+        # _relay_pipes: I am R, forwarding for someone else. Bidirectional
+        # (addr_key_a -> addr_key_b and back), populated by open_relay_pipe().
+        self._relay_pipes: dict[str, str] = {}
+        # _relay_tunnels: I am A or B, tunneling my own connection through
+        # the session at this addr_key. Populated by register_relay_tunnel().
+        self._relay_tunnels: dict[str, RelayedStreamReader] = {}
 
     async def start_server(self) -> None:
         self._server = await asyncio.start_server(
@@ -220,13 +233,33 @@ class ConnectionManager:
                         )
                     if self.on_message:
                         await self.on_message(session.addr_key, decoded)
-                # else: "raw" frame kind (neither JSON nor binary marker) — drop.
+                elif kind == "relay":
+                    # Phase 46.1: opaque relay-tunnel chunk. Never reaches
+                    # on_message/NetworkMessageReceived — it's either
+                    # someone else's traffic I'm relaying (pipe) or my
+                    # own tunneled connection's bytes (tunnel), and in
+                    # both cases the content is meaningless at this
+                    # layer.
+                    paired_addr_key = self._relay_pipes.get(session.addr_key)
+                    if paired_addr_key is not None:
+                        await self.send_relay_data(paired_addr_key, payload)
+                    else:
+                        tunnel_reader = self._relay_tunnels.get(session.addr_key)
+                        if tunnel_reader is not None:
+                            tunnel_reader.feed_data(payload)
+                        # else: relay chunk with no active pipe or tunnel
+                        # for this addr_key — drop (stray/unsolicited).
+                # else: "raw" frame kind (neither JSON nor binary/relay marker) — drop.
         except (ConnectionClosedError, asyncio.IncompleteReadError, ConnectionResetError):
             pass  # peer disconnected
         except (protocol.ProtocolError, TransportError):
             pass  # malformed frame, or a decryption/replay failure — drop the connection
         finally:
             self._connections.pop(session.addr_key, None)
+            self.close_relay_pipe(session.addr_key)
+            tunnel_reader = self._relay_tunnels.pop(session.addr_key, None)
+            if tunnel_reader is not None:
+                tunnel_reader.feed_eof()
             await session.close()
             if self.event_bus:
                 from core.events import PeerDisconnected
@@ -257,6 +290,83 @@ class ConnectionManager:
         except (ConnectionClosedError, ConnectionResetError, BrokenPipeError, TransportError):
             self._connections.pop(addr_key, None)
             return False
+
+    async def send_relay_data(self, addr_key: str, payload: bytes) -> bool:
+        """Send a raw relay-tunnel chunk on an already-open session
+        (Phase 46.1). Same shape as send_binary(); kept separate so a
+        relay chunk never gets decoded as file_data. Returns False if
+        not connected."""
+        session = self._connections.get(addr_key)
+        if session is None:
+            return False
+        try:
+            await session.send_relay(payload)
+            return True
+        except (ConnectionClosedError, ConnectionResetError, BrokenPipeError, TransportError):
+            self._connections.pop(addr_key, None)
+            return False
+
+    def open_relay_pipe(self, addr_key_a: str, addr_key_b: str) -> None:
+        """I am R: bridge two already-connected sessions. Any `relay`
+        chunk arriving on either addr_key gets forwarded verbatim to the
+        other, with no decoding — see _read_loop. Caller (Phase 46.2) is
+        responsible for having already checked both are actually
+        connected and that this bridging is authorized."""
+        self._relay_pipes[addr_key_a] = addr_key_b
+        self._relay_pipes[addr_key_b] = addr_key_a
+
+    def close_relay_pipe(self, addr_key: str) -> None:
+        """Tear down a relay pipe given either side's addr_key. Only
+        removes the routing entries — does not close either underlying
+        session, which may still be in use for unrelated traffic (e.g.
+        R's own group messages with that peer). Safe to call even if no
+        pipe is open for this addr_key."""
+        paired = self._relay_pipes.pop(addr_key, None)
+        if paired is not None:
+            self._relay_pipes.pop(paired, None)
+
+    def is_relay_pipe_open(self, addr_key: str) -> bool:
+        return addr_key in self._relay_pipes
+
+    def register_relay_tunnel(self, addr_key: str, reader: RelayedStreamReader) -> None:
+        """I am A or B: `relay` chunks arriving on the real session at
+        addr_key (my connection to R) are bytes of my own tunneled
+        connection, not something to forward — feed them to reader
+        instead of on_message. See open_relay_tunnel()."""
+        self._relay_tunnels[addr_key] = reader
+
+    def unregister_relay_tunnel(self, addr_key: str) -> None:
+        self._relay_tunnels.pop(addr_key, None)
+
+    def open_relay_tunnel(self, r_addr_key: str) -> TCPConnection:
+        """I am A or B: build a TCPConnection whose bytes tunnel through
+        my existing session with R (r_addr_key) as opaque `relay`
+        chunks, and register it so incoming `relay` chunks on that
+        session feed this tunnel instead of being dropped.
+
+        The returned TCPConnection can be handed straight to
+        perform_handshake_initiator/_responder (via its .reader/.writer)
+        or wrapped the same way initiate_secure_session/
+        accept_secure_session wrap a real one — nothing downstream needs
+        to know this isn't a real socket. Caller owns unregistering it
+        (unregister_relay_tunnel) once the tunneled connection is done;
+        it's also cleaned up automatically if the underlying session
+        with R itself closes first (see _read_loop).
+        """
+        async def _send(chunk: bytes) -> None:
+            await self.send_relay_data(r_addr_key, chunk)
+
+        reader = RelayedStreamReader()
+        writer = RelayedStreamWriter(_send)
+        self.register_relay_tunnel(r_addr_key, reader)
+        # NOTE: this TCPConnection's addr_key is the RelayedStreamWriter
+        # default placeholder ("0.0.0.0:0"), same for every tunnel — a
+        # relayed connection has no real socket to derive a distinct
+        # ip:port from. Fine for 46.1 (nothing here keys _connections by
+        # it); how the resulting SecureSession-to-B gets a distinct,
+        # collision-free key in _connections is a 46.3 concern (A's
+        # connect-via-relay orchestration), not this primitive's.
+        return TCPConnection(reader, writer)
 
     def is_connected(self, addr_key: str) -> bool:
         return addr_key in self._connections
