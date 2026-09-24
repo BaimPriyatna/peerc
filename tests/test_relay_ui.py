@@ -170,3 +170,105 @@ async def test_relay_response_declined_logs(relay_app):
     }
     await relay_app._on_relay_response("addr-r", msg)
     assert any("Relay declined" in m for m in relay_app.logs)
+
+
+# ---------------------------------------------------------------------------
+# Phase 46.3: Candidate query / response & _try_relay_connect
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_relay_candidate_query_not_hosting_is_silent(relay_app):
+    msg = {"group_id": relay_app._group.group_id}
+    await relay_app._on_relay_candidate_query("addr-a", msg)
+    relay_app.manager.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_relay_candidate_query_not_member_is_silent(relay_app):
+    group_id = relay_app._group.group_id
+    relay_app._relay_active_groups.add(group_id)
+    outsider = generate_keypair()
+    relay_app.manager.get_peer_device_id = MagicMock(return_value=outsider.device_id)
+    msg = {"group_id": group_id}
+
+    await relay_app._on_relay_candidate_query("addr-outsider", msg)
+    relay_app.manager.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_relay_candidate_query_happy_path_replies_available(relay_app):
+    group_id = relay_app._group.group_id
+    relay_app._relay_active_groups.add(group_id)
+    msg = {"group_id": group_id}
+
+    await relay_app._on_relay_candidate_query("addr-a", msg)
+    relay_app.manager.send.assert_awaited_once()
+    sent_addr, sent_msg = relay_app.manager.send.await_args.args
+    assert sent_addr == "addr-a"
+    assert sent_msg["type"] == "relay_candidate_response"
+    assert sent_msg["available"] is True
+
+
+@pytest.mark.asyncio
+async def test_relay_candidate_response_feeds_queue(relay_app):
+    import asyncio
+    group_id = relay_app._group.group_id
+    q = asyncio.Queue()
+    relay_app._relay_candidate_queues[group_id] = q
+
+    msg = {"group_id": group_id, "available": True}
+    await relay_app._on_relay_candidate_response("addr-r", msg)
+
+    assert not q.empty()
+    item = await q.get()
+    assert item == "addr-r"
+
+
+@pytest.mark.asyncio
+async def test_try_relay_connect_direct_success(relay_app):
+    from unittest.mock import AsyncMock
+    target_id = relay_app._keypair_b.device_id
+    peer_mock = MagicMock()
+    peer_mock.ip = "192.168.1.50"
+    peer_mock.port = 7600
+    relay_app.registry = {target_id: peer_mock}
+    relay_app.manager.connect_to = AsyncMock(return_value="direct-addr")
+
+    res = await relay_app._try_relay_connect(target_id, relay_app._group.group_id)
+    assert res == "direct-addr"
+
+
+@pytest.mark.asyncio
+async def test_try_relay_connect_fallback_success(relay_app):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    target_id = relay_app._keypair_b.device_id
+    group_id = relay_app._group.group_id
+
+    # Direct connect fails
+    relay_app.registry = {}
+    relay_app.manager.find_addr_key_for_device = MagicMock(return_value=None)
+    relay_app.manager.list_connected_addr_keys = MagicMock(return_value=["r-addr"])
+
+    # Simulate R candidate response arriving via queue feeding
+    orig_send = relay_app.manager.send
+
+    async def mock_send(addr, msg):
+        if msg.get("type") == "relay_candidate_query":
+            q = relay_app._relay_candidate_queues.get(group_id)
+            if q:
+                await q.put("r-addr")
+        elif msg.get("type") == "relay_request":
+            fut = relay_app._relay_response_futures.get(("r-addr", group_id, target_id))
+            if fut and not fut.done():
+                fut.set_result(True)
+        return True
+
+    relay_app.manager.send = AsyncMock(side_effect=mock_send)
+    relay_app.manager.connect_via_relay_tunnel = AsyncMock(return_value="relay-tunneled-addr")
+
+    res = await relay_app._try_relay_connect(target_id, group_id)
+    assert res == "relay-tunneled-addr"
+

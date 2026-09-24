@@ -126,3 +126,32 @@ def authorize_relay_request(
         raise RelayTargetUnreachableError(
             "relay_request: not currently connected to the requested target"
         )
+
+
+def authorize_relay_candidate_query(
+    *,
+    group_id: str,
+    requester_device_id: str,
+    relay_active_groups: set,
+    group_store: GroupStore,
+) -> None:
+    """Raise a RelayError subclass if replying to this relay_candidate_query
+    would not be authorized right now. Returns None (silently) if this device
+    is currently in relay mode for the group and the requester is an active member.
+
+    Checks in order:
+      1. RelayNotHostingError — relay mode is off for group_id here
+      2. RelayAuthError       — requester isn't an active member
+    """
+    if group_id not in relay_active_groups:
+        raise RelayNotHostingError(
+            f"relay_candidate_query: relay mode is not on for group {group_id!r}"
+        )
+
+    status = group_store.get_membership_status(group_id, requester_device_id)
+    if status is None or status != MembershipStatus.ACTIVE:
+        raise RelayAuthError(
+            f"relay_candidate_query: requester {requester_device_id!r} is not an "
+            f"active member of group {group_id!r}"
+        )
+

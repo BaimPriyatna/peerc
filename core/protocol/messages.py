@@ -478,6 +478,48 @@ def make_relay_request(group_id: str, target_device_id: str) -> dict:
     }
 
 
+def make_relay_candidate_query(group_id: str) -> dict:
+    """Phase 46.3: broadcast from A to all currently-connected peers,
+    asking "are you in Relay mode for group_id right now?"
+
+    Intentionally has no target_device_id: this is pure capability
+    discovery ("are you a relay?"), not a pre-authorization check.
+    The actual connectivity check ("are you connected to B?") happens
+    later in authorize_relay_request() when A sends relay_request —
+    keeping query and request cleanly separated avoids stale answers
+    from the window between query and request.
+
+    Peers that are NOT in relay mode for this group stay fully silent
+    (same posture as _on_rendezvous_lookup's not-hosting gate) — only
+    peers that can and will relay reply.
+    """
+    return {
+        "type": "relay_candidate_query",
+        "version": PROTOCOL_VERSION,
+        "group_id": group_id,
+        "timestamp": time.time(),
+    }
+
+
+def make_relay_candidate_response(group_id: str, available: bool) -> dict:
+    """Phase 46.3: a relay-mode peer's reply to relay_candidate_query.
+
+    *available=True* means this peer is currently in Relay mode for
+    group_id — A may proceed to send it a relay_request. The response
+    is only ever sent when available=True (unavailable peers stay
+    silent, matching the query's not-hosting gate), but the field is
+    included for symmetry with relay_response's accepted field and to
+    keep validate_message() coverage uniform.
+    """
+    return {
+        "type": "relay_candidate_response",
+        "version": PROTOCOL_VERSION,
+        "group_id": group_id,
+        "available": available,
+        "timestamp": time.time(),
+    }
+
+
 def make_relay_response(group_id: str, target_device_id: str, accepted: bool) -> dict:
     """Phase 46.2: R's reply to a relay_request.
 
@@ -557,6 +599,8 @@ REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "rendezvous_lookup_response": ("group_id", "target_device_id", "endpoint_update", "timestamp"),
     "relay_request": ("group_id", "target_device_id", "timestamp"),
     "relay_response": ("group_id", "target_device_id", "accepted", "timestamp"),
+    "relay_candidate_query": ("group_id", "timestamp"),
+    "relay_candidate_response": ("group_id", "available", "timestamp"),
     "error": ("code", "message"),
 }
 
@@ -748,6 +792,18 @@ def validate_message(message) -> dict:
             raise ProtocolError("relay_response.target_device_id must be a non-empty string")
         if not isinstance(message["accepted"], bool):
             raise ProtocolError("relay_response.accepted must be a boolean")
+
+    if msg_type == "relay_candidate_query":
+        gid = message["group_id"]
+        if not isinstance(gid, str) or not gid:
+            raise ProtocolError("relay_candidate_query.group_id must be a non-empty string")
+
+    if msg_type == "relay_candidate_response":
+        gid = message["group_id"]
+        if not isinstance(gid, str) or not gid:
+            raise ProtocolError("relay_candidate_response.group_id must be a non-empty string")
+        if not isinstance(message["available"], bool):
+            raise ProtocolError("relay_candidate_response.available must be a boolean")
 
     return message
 

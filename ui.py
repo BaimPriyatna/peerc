@@ -112,11 +112,14 @@ from core.connectivity import (
     LinkSignatureError,
     Locator,
     LocatorStore,
+    RelayAuthError,
     RelayError,
+    RelayNotHostingError,
     RelayTargetUnreachableError,
     RendezvousCache,
     RendezvousError,
     WrongPinError,
+    authorize_relay_candidate_query,
     authorize_relay_request,
     create_link,
     decode_link,
@@ -143,10 +146,21 @@ from core.vault import (
     vault_exists,
 )
 from peer import ConnectionManager
+from core.crypto.encryption import SecureChannel
+from core.crypto.handshake import HANDSHAKE_TIMEOUT, HandshakeError, perform_handshake_initiator
+from core.transport import EncryptedTransport, SecureSession
 
 UI_TCP_PORT = 5656
 IP_CHANGE_CHECK_INTERVAL = 30  # seconds — Phase 45.1's own-IP-change poll
 AUTO_LOCK_POLL_SECONDS = 1.0
+# Phase 46.3: relay orchestration timeouts.
+# Short direct-connect attempt before falling back to relay; then a brief
+# window to collect relay_candidate_response replies (all peers reply
+# near-simultaneously, so 0.5 s is more than enough on a LAN/VPN),
+# and a per-candidate wait for relay_response.
+RELAY_DIRECT_TIMEOUT = 3.0        # seconds — direct connect attempt before relay
+RELAY_CANDIDATE_WINDOW = 0.5      # seconds — collect relay_candidate_response replies
+RELAY_RESPONSE_TIMEOUT = 3.0      # seconds — wait for accepted/declined from one candidate
 
 
 def apply_selection_to_strip(strip: Strip, start: int, end: int, style: Style) -> Strip:
@@ -777,6 +791,17 @@ class ChatApp(App):
         # /group relay on|off command that populates this is Phase
         # 46.4; this set already gates _on_relay_request as of 46.2.
         self._relay_active_groups: set = set()
+        # Phase 46.3: A-side relay orchestration state.
+        # _relay_candidate_queues: keyed by group_id. When A broadcasts a
+        # relay_candidate_query, it registers a Queue here; arriving
+        # relay_candidate_response messages feed the queue so the
+        # orchestration coroutine can collect candidates during the window.
+        self._relay_candidate_queues: dict = {}
+        # _relay_response_futures: keyed by (r_addr_key, group_id, target_device_id).
+        # When A sends a relay_request to candidate R it registers a Future;
+        # _on_relay_response resolves it to True/False so the sequential
+        # trial loop can proceed without blocking on a manual timeout.
+        self._relay_response_futures: dict = {}
         self.vault_db = None  # VaultDatabase, set in on_mount (Phase 39.2)
         self.vault_persistence = None  # VaultPersistence, set in on_mount (Phase 39.2)
         self.vault_session = None  # VaultSession, set in on_mount (Phase 39.3)
@@ -2756,6 +2781,10 @@ class ChatApp(App):
             await self._on_relay_request(addr_key, evt.message)
         elif msg_type == "relay_response":
             await self._on_relay_response(addr_key, evt.message)
+        elif msg_type == "relay_candidate_query":
+            await self._on_relay_candidate_query(addr_key, evt.message)
+        elif msg_type == "relay_candidate_response":
+            await self._on_relay_candidate_response(addr_key, evt.message)
         elif msg_type == "group_join_request":
             await self._on_group_join_request(addr_key, evt.message)
         elif msg_type == "group_join_response":
@@ -2976,23 +3005,227 @@ class ChatApp(App):
         await self.manager.send(addr_key, wire)
 
     async def _on_relay_response(self, addr_key: str, msg: dict) -> None:
-        """Requester (A) side of relay_response (Phase 46.2). Actually
-        opening a relay tunnel and running the Phase 6 handshake with
-        the target over it is Phase 46.3's direct-then-relay
-        orchestration — this just surfaces the outcome for now."""
+        """Requester (A) side of relay_response (Phase 46.3).
+
+        If there is a pending Future registered in _relay_response_futures by
+        _try_relay_connect(), resolve it so the orchestration loop can proceed
+        without spinning on its own timeout.  If no Future is registered (e.g.
+        an unsolicited or late response) just log and drop it.
+        """
         group_id = msg.get("group_id")
         target_device_id = msg.get("target_device_id")
         accepted = msg.get("accepted")
-        if accepted:
-            self._log(
-                f"[cyan]Relay accepted by {addr_key} for "
-                f"{(target_device_id or '')[:8]}... (group {(group_id or '')[:8]}...)[/cyan]"
-            )
+        if not group_id or target_device_id is None or accepted is None:
+            return
+
+        fut_key = (addr_key, group_id, target_device_id)
+        fut = self._relay_response_futures.get(fut_key)
+        if fut is not None and not fut.done():
+            fut.set_result(bool(accepted))
         else:
-            self._log(
-                f"[dim]Relay declined by {addr_key} for "
-                f"{(target_device_id or '')[:8]}... (not connected to target)[/dim]"
+            # Unsolicited or late — log only.
+            if accepted:
+                self._log(
+                    f"[dim]Relay accepted (unsolicited) by {addr_key} for "
+                    f"{(target_device_id or '')[:8]}... (group {(group_id or '')[:8]}...)[/dim]"
+                )
+            else:
+                self._log(
+                    f"[dim]Relay declined (unsolicited) by {addr_key} for "
+                    f"{(target_device_id or '')[:8]}... (not connected to target)[/dim]"
+                )
+
+    async def _on_relay_candidate_query(self, addr_key: str, msg: dict) -> None:
+        """Relay-host (R) side of relay_candidate_query (Phase 46.3).
+
+        If we are currently in relay mode for the requested group AND the
+        requester is an active member, we reply with relay_candidate_response
+        available=True.  Any authorization failure stays silent — same posture
+        as _on_rendezvous_lookup's not-hosting gate — so A cannot enumerate
+        which peers are in relay mode from error paths.
+        """
+        group_id = msg.get("group_id")
+        if not group_id or self.group_store is None:
+            return
+        requester_id = self.manager.get_peer_device_id(addr_key)
+        if requester_id is None:
+            return
+        try:
+            authorize_relay_candidate_query(
+                group_id=group_id,
+                requester_device_id=requester_id,
+                relay_active_groups=self._relay_active_groups,
+                group_store=self.group_store,
             )
+        except (RelayNotHostingError, RelayAuthError):
+            return  # silent — not hosting or not authorized
+        wire = protocol.make_relay_candidate_response(group_id, available=True)
+        await self.manager.send(addr_key, wire)
+
+    async def _on_relay_candidate_response(self, addr_key: str, msg: dict) -> None:
+        """Requester (A) side of relay_candidate_response (Phase 46.3).
+
+        Feed the addr_key of the responding relay candidate into the Queue
+        registered for this group_id by _try_relay_connect(), so the
+        orchestration coroutine can collect all responses arriving within
+        RELAY_CANDIDATE_WINDOW seconds without busy-waiting.
+        """
+        group_id = msg.get("group_id")
+        available = msg.get("available")
+        if not group_id or not available:
+            return
+        q = self._relay_candidate_queues.get(group_id)
+        if q is not None:
+            await q.put(addr_key)
+
+    async def _try_relay_connect(
+        self,
+        target_device_id: str,
+        group_id: str,
+    ) -> str | None:
+        """Phase 46.3: A-side direct-then-relay orchestration.
+
+        1. Attempt a direct connect via connect_to() with a short timeout.
+           If it succeeds, return the addr_key immediately.
+        2. Broadcast relay_candidate_query to all connected peers and collect
+           responses for RELAY_CANDIDATE_WINDOW seconds.
+        3. Try each responding candidate sequentially: send relay_request,
+           wait up to RELAY_RESPONSE_TIMEOUT seconds for relay_response,
+           then call connect_via_relay_tunnel() if accepted=True.
+        4. Return the tunneled addr_key on the first success, or None if all
+           candidates decline / time out.
+
+        Does NOT modify self.registry or send hello/hello_ack — the tunnel's
+        Phase 6 handshake already authenticates the far end.  The caller is
+        responsible for sending any application-level hello after connecting.
+        """
+        # ------------------------------------------------------------------ #
+        # Step 1: attempt direct connection                                   #
+        # ------------------------------------------------------------------ #
+        existing = self.manager.find_addr_key_for_device(target_device_id)
+        if existing is not None:
+            return existing  # already connected
+
+        peer = self.registry.get(target_device_id)
+        if peer is not None and peer.ip and peer.port:
+            try:
+                addr_key = await asyncio.wait_for(
+                    self.manager.connect_to(peer.ip, peer.port),
+                    timeout=RELAY_DIRECT_TIMEOUT,
+                )
+                self._log(
+                    f"[green]Direct connection to {target_device_id[:8]}... succeeded.[/green]"
+                )
+                return addr_key
+            except Exception:
+                self._log(
+                    f"[dim]Direct connect to {target_device_id[:8]}... failed — "
+                    f"trying relay fallback...[/dim]"
+                )
+
+        # ------------------------------------------------------------------ #
+        # Step 2: broadcast relay_candidate_query, collect responses          #
+        # ------------------------------------------------------------------ #
+        addr_keys = self.manager.list_connected_addr_keys()
+        if not addr_keys:
+            self._log("[red]Relay fallback: no connected peers to query.[/red]")
+            return None
+
+        q: asyncio.Queue = asyncio.Queue()
+        self._relay_candidate_queues[group_id] = q
+        wire = protocol.make_relay_candidate_query(group_id)
+        for ak in addr_keys:
+            try:
+                await self.manager.send(ak, wire)
+            except Exception:
+                pass
+
+        # Collect candidates that respond within the window.
+        candidates: list[str] = []
+        deadline = asyncio.get_event_loop().time() + RELAY_CANDIDATE_WINDOW
+        try:
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    candidate = await asyncio.wait_for(q.get(), timeout=remaining)
+                    candidates.append(candidate)
+                except asyncio.TimeoutError:
+                    break
+        finally:
+            self._relay_candidate_queues.pop(group_id, None)
+
+        if not candidates:
+            self._log(
+                f"[dim]Relay fallback: no peers are hosting relay for group "
+                f"{group_id[:8]}...[/dim]"
+            )
+            return None
+
+        self._log(
+            f"[cyan]Relay fallback: {len(candidates)} candidate(s) for "
+            f"group {group_id[:8]}... — trying sequentially...[/cyan]"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Step 3: try each candidate sequentially                             #
+        # ------------------------------------------------------------------ #
+        loop = asyncio.get_event_loop()
+        for r_addr_key in candidates:
+            fut_key = (r_addr_key, group_id, target_device_id)
+            fut: asyncio.Future = loop.create_future()
+            self._relay_response_futures[fut_key] = fut
+            relay_req = protocol.make_relay_request(group_id, target_device_id)
+            try:
+                await self.manager.send(r_addr_key, relay_req)
+            except Exception:
+                self._relay_response_futures.pop(fut_key, None)
+                continue
+
+            try:
+                accepted = await asyncio.wait_for(
+                    asyncio.shield(fut), timeout=RELAY_RESPONSE_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                self._relay_response_futures.pop(fut_key, None)
+                self._log(
+                    f"[dim]Relay candidate {r_addr_key} timed out — skipping.[/dim]"
+                )
+                continue
+            finally:
+                self._relay_response_futures.pop(fut_key, None)
+
+            if not accepted:
+                self._log(
+                    f"[dim]Relay candidate {r_addr_key} declined "
+                    f"(not connected to {target_device_id[:8]}...) — skipping.[/dim]"
+                )
+                continue
+
+            # ---------------------------------------------------------------- #
+            # Step 4: relay accepted — tunnel handshake                        #
+            # ---------------------------------------------------------------- #
+            try:
+                tunneled_addr = await self.manager.connect_via_relay_tunnel(
+                    r_addr_key, target_device_id, timeout=HANDSHAKE_TIMEOUT
+                )
+                self._log(
+                    f"[green]Relay tunnel to {target_device_id[:8]}... established "
+                    f"via {r_addr_key} (group {group_id[:8]}...).[/green]"
+                )
+                return tunneled_addr
+            except Exception as exc:
+                self._log(
+                    f"[dim]Relay tunnel via {r_addr_key} failed: {exc} — "
+                    f"trying next candidate...[/dim]"
+                )
+
+        self._log(
+            f"[red]Relay fallback exhausted: could not reach "
+            f"{target_device_id[:8]}... through any relay.[/red]"
+        )
+        return None
 
     async def _handle_group_rendezvous(self, group_id: str, extra: str) -> None:
         """/group rendezvous <group_id> on|off|find <device_id>"""

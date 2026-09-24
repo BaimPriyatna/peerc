@@ -28,10 +28,10 @@ tests) must be explicit about which identity it's handshaking as.
 """
 
 import asyncio
-from typing import Awaitable, Callable, List, Optional
+from typing import Awaitable, Callable, List, Optional, Tuple
 
 import protocol
-from core.crypto.handshake import HandshakeError
+from core.crypto.handshake import HANDSHAKE_TIMEOUT, HandshakeError
 from core.identity.device_identity import DeviceKeypair
 from core.transport import (
     RelayedStreamReader,
@@ -40,6 +40,7 @@ from core.transport import (
     TCPConnection,
     accept_secure_session,
     initiate_secure_session,
+    initiate_secure_session_on_connection,
 )
 from core.transport.timeout import ConnectionClosedError, TransportError
 from core.trust.store import TrustDecision, TrustStore
@@ -95,6 +96,9 @@ class ConnectionManager:
         # _relay_tunnels: I am A or B, tunneling my own connection through
         # the session at this addr_key. Populated by register_relay_tunnel().
         self._relay_tunnels: dict[str, RelayedStreamReader] = {}
+        # _tunnel_r_keys: maps tunneled session addr_key -> underlying relay r_addr_key.
+        # Used to unregister relay tunnel upon session teardown.
+        self._tunnel_r_keys: dict[str, str] = {}
 
     async def start_server(self) -> None:
         self._server = await asyncio.start_server(
@@ -247,8 +251,34 @@ class ConnectionManager:
                         tunnel_reader = self._relay_tunnels.get(session.addr_key)
                         if tunnel_reader is not None:
                             tunnel_reader.feed_data(payload)
-                        # else: relay chunk with no active pipe or tunnel
-                        # for this addr_key — drop (stray/unsolicited).
+                        elif len(self._connections) < self.max_connections:
+                            # Phase 46.3: incoming relayed connection — peer is initiating a handshake via R
+                            r_addr_key = session.addr_key
+                            reader = RelayedStreamReader()
+                            self.register_relay_tunnel(r_addr_key, reader)
+                            reader.feed_data(payload)
+
+                            async def _handle_incoming_relay(r_key: str, r_reader: RelayedStreamReader) -> None:
+                                async def _send(chunk: bytes) -> None:
+                                    await self.send_relay_data(r_key, chunk)
+                                writer = RelayedStreamWriter(_send, peer_addr=("relayed-temp", 0))
+                                try:
+                                    relayed_session = await accept_secure_session(
+                                        r_reader, writer,
+                                        my_identity=self.my_identity,
+                                        my_name=self.my_name,
+                                        trust_store=self.trust_store,
+                                    )
+                                    relayed_session.transport.tcp._peer_ip = f"relay-{relayed_session.peer_device_id[:8]}"
+                                    relayed_session.transport.tcp._peer_port = 0
+                                    self._tunnel_r_keys[relayed_session.addr_key] = r_key
+                                    await self._register_session(relayed_session, incoming=True)
+                                    await self._read_loop(relayed_session)
+                                except Exception:
+                                    self.unregister_relay_tunnel(r_key)
+
+                            asyncio.create_task(_handle_incoming_relay(r_addr_key, reader))
+                        # else: relay chunk with no active pipe or tunnel and limit reached — drop
                 # else: "raw" frame kind (neither JSON nor binary/relay marker) — drop.
         except (ConnectionClosedError, asyncio.IncompleteReadError, ConnectionResetError):
             pass  # peer disconnected
@@ -257,6 +287,9 @@ class ConnectionManager:
         finally:
             self._connections.pop(session.addr_key, None)
             self.close_relay_pipe(session.addr_key)
+            r_key = self._tunnel_r_keys.pop(session.addr_key, None)
+            if r_key is not None:
+                self.unregister_relay_tunnel(r_key)
             tunnel_reader = self._relay_tunnels.pop(session.addr_key, None)
             if tunnel_reader is not None:
                 tunnel_reader.feed_eof()
@@ -338,7 +371,11 @@ class ConnectionManager:
     def unregister_relay_tunnel(self, addr_key: str) -> None:
         self._relay_tunnels.pop(addr_key, None)
 
-    def open_relay_tunnel(self, r_addr_key: str) -> TCPConnection:
+    def open_relay_tunnel(
+        self,
+        r_addr_key: str,
+        peer_addr: Tuple[str, int] = ("0.0.0.0", 0),
+    ) -> TCPConnection:
         """I am A or B: build a TCPConnection whose bytes tunnel through
         my existing session with R (r_addr_key) as opaque `relay`
         chunks, and register it so incoming `relay` chunks on that
@@ -357,16 +394,56 @@ class ConnectionManager:
             await self.send_relay_data(r_addr_key, chunk)
 
         reader = RelayedStreamReader()
-        writer = RelayedStreamWriter(_send)
+        writer = RelayedStreamWriter(_send, peer_addr=peer_addr)
         self.register_relay_tunnel(r_addr_key, reader)
-        # NOTE: this TCPConnection's addr_key is the RelayedStreamWriter
-        # default placeholder ("0.0.0.0:0"), same for every tunnel — a
-        # relayed connection has no real socket to derive a distinct
-        # ip:port from. Fine for 46.1 (nothing here keys _connections by
-        # it); how the resulting SecureSession-to-B gets a distinct,
-        # collision-free key in _connections is a 46.3 concern (A's
-        # connect-via-relay orchestration), not this primitive's.
         return TCPConnection(reader, writer)
+
+    async def connect_via_relay_tunnel(
+        self,
+        r_addr_key: str,
+        target_device_id: str,
+        timeout: float = HANDSHAKE_TIMEOUT,
+    ) -> str:
+        """Phase 46.3: establish a SecureSession to target_device_id by
+        tunneling a Phase 6 initiator handshake through an existing session
+        with relay R (r_addr_key).
+        Registers the resulting session into _connections, starts its background
+        read loop, and returns the assigned collision-free addr_key.
+        """
+        existing_key = self.find_addr_key_for_device(target_device_id)
+        if existing_key is not None and existing_key in self._connections:
+            return existing_key
+
+        if len(self._connections) >= self.max_connections:
+            raise ConnectionLimitError(
+                f"at connection limit ({self.max_connections}); refusing to connect to {target_device_id[:8]}"
+            )
+
+        peer_addr = (f"relay-{target_device_id[:8]}", 0)
+        tcp_conn = self.open_relay_tunnel(r_addr_key, peer_addr=peer_addr)
+        try:
+            session = await initiate_secure_session_on_connection(
+                tcp_conn,
+                my_identity=self.my_identity,
+                my_name=self.my_name,
+                trust_store=self.trust_store,
+                handshake_timeout=timeout,
+            )
+            if session.peer_device_id != target_device_id:
+                await session.close()
+                self.unregister_relay_tunnel(r_addr_key)
+                raise HandshakeError(
+                    f"Relayed handshake returned unexpected peer_device_id: "
+                    f"{session.peer_device_id} (expected {target_device_id})"
+                )
+            self._tunnel_r_keys[session.addr_key] = r_addr_key
+            await self._register_session(session, incoming=False)
+            asyncio.create_task(self._read_loop(session))
+            return session.addr_key
+        except Exception:
+            self.unregister_relay_tunnel(r_addr_key)
+            raise
+
 
     def is_connected(self, addr_key: str) -> bool:
         return addr_key in self._connections

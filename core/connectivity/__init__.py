@@ -75,6 +75,7 @@ from .relay import (
     RelayError,
     RelayNotHostingError,
     RelayTargetUnreachableError,
+    authorize_relay_candidate_query,
     authorize_relay_request,
 )
 
@@ -116,8 +117,9 @@ __all__ = [
     "RendezvousAuthError",
     "RendezvousSignatureError",
     "RendezvousDeviceIdMismatchError",
-    # Phase 46.2: Relay authorization
+    # Phase 46.2/46.3: Relay authorization
     "authorize_relay_request",
+    "authorize_relay_candidate_query",
     "RelayError",
     "RelayAuthError",
     "RelayNotHostingError",

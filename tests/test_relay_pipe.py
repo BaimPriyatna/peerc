@@ -24,6 +24,7 @@ from core.crypto.handshake import perform_handshake_initiator, perform_handshake
 from core.identity.device_identity import generate_keypair
 from core.transport import EncryptedTransport, RelayedStreamReader, RelayedStreamWriter, SecureSession
 from peer import ConnectionManager
+import protocol
 
 PORT_R = 7601
 PORT_A = 7602
@@ -286,3 +287,101 @@ async def test_full_handshake_and_message_through_relay_tunnel():
         await manager_a.close_all()
         await manager_b.close_all()
         await manager_r.close_all()
+
+
+# ---------------------------------------------------------------------------
+# 6. Phase 46.3: connect_via_relay_tunnel with passive B
+# ---------------------------------------------------------------------------
+
+
+async def test_connect_via_relay_tunnel_e2e_passive_bob():
+    """Phase 46.3: Alice establishes a SecureSession to Bob using
+    connect_via_relay_tunnel() through R. Bob is completely passive:
+    he has not registered any tunnel on R in advance. When Alice's
+    relayed handshake bytes arrive at Bob, Bob's virtual incoming
+    connection path accepts the handshake automatically.
+    Both sides register the tunneled SecureSession and can exchange
+    messages over on_message."""
+    alice_received = []
+    bob_received = []
+
+    async def a_on_message(addr_key, msg):
+        alice_received.append((addr_key, msg))
+
+    async def b_on_message(addr_key, msg):
+        bob_received.append((addr_key, msg))
+
+    manager_r = ConnectionManager(
+        listen_port=PORT_R, my_identity=generate_keypair(), my_name="R"
+    )
+    alice_identity = generate_keypair()
+    bob_identity = generate_keypair()
+    manager_a = ConnectionManager(
+        listen_port=PORT_A, my_identity=alice_identity, my_name="Alice", on_message=a_on_message
+    )
+    manager_b = ConnectionManager(
+        listen_port=PORT_B, my_identity=bob_identity, my_name="Bob", on_message=b_on_message
+    )
+
+    try:
+        await manager_r.start_server()
+        await manager_a.start_server()
+        await manager_b.start_server()
+
+        addr_key_a_to_r = await _connect(manager_a, manager_r, "127.0.0.1", PORT_R)
+        r_keys_after_a = set(manager_r.list_connected_addr_keys())
+        addr_key_r_to_a = next(iter(r_keys_after_a))
+
+        addr_key_b_to_r = await _connect(manager_b, manager_r, "127.0.0.1", PORT_R)
+        r_keys_after_b = set(manager_r.list_connected_addr_keys())
+        addr_key_r_to_b = next(iter(r_keys_after_b - r_keys_after_a))
+
+        # R opens the pipe (authorized by Phase 46.2)
+        manager_r.open_relay_pipe(addr_key_r_to_a, addr_key_r_to_b)
+
+        # Alice dials Bob via relay tunnel. Bob does NOTHING active!
+        tunneled_addr_a = await manager_a.connect_via_relay_tunnel(
+            addr_key_a_to_r, bob_identity.device_id, timeout=5.0
+        )
+        assert tunneled_addr_a.startswith("relay-")
+        assert manager_a.get_peer_device_id(tunneled_addr_a) == bob_identity.device_id
+
+        # Give Bob's background accept task a moment to register session
+        for _ in range(50):
+            if manager_b.find_addr_key_for_device(alice_identity.device_id):
+                break
+            await asyncio.sleep(0.05)
+
+        tunneled_addr_b = manager_b.find_addr_key_for_device(alice_identity.device_id)
+        assert tunneled_addr_b is not None
+        assert tunneled_addr_b.startswith("relay-")
+
+        # Send message from Alice to Bob over the tunneled session
+        msg_a = protocol.make_chat_message(alice_identity.device_id, "Alice", "hello passive bob")
+        await manager_a.send(tunneled_addr_a, msg_a)
+
+        for _ in range(50):
+            if bob_received:
+                break
+            await asyncio.sleep(0.05)
+
+        assert len(bob_received) == 1
+        assert bob_received[0][1]["text"] == "hello passive bob"
+
+        # Send reply from Bob to Alice
+        msg_b = protocol.make_chat_message(bob_identity.device_id, "Bob", "hello alice")
+        await manager_b.send(tunneled_addr_b, msg_b)
+
+        for _ in range(50):
+            if alice_received:
+                break
+            await asyncio.sleep(0.05)
+
+        assert len(alice_received) == 1
+        assert alice_received[0][1]["text"] == "hello alice"
+
+    finally:
+        await manager_a.close_all()
+        await manager_b.close_all()
+        await manager_r.close_all()
+

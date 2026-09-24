@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.19.2] — Phase 46.3: A-side direct-then-relay orchestration
+
+### Added
+- **`core/protocol/messages.py`**: `make_relay_candidate_query(group_id)` (A broadcasts to all connected peers) and `make_relay_candidate_response(group_id, available)` (R responds if relay mode is on and authorized), plus `REQUIRED_FIELDS` and `validate_message()` coverage for both. Exported in `core/protocol/__init__.py` and root `protocol.py`.
+- **`core/connectivity/relay.py`**: `authorize_relay_candidate_query()` — pure authorization logic checking relay mode status (`RelayNotHostingError`) and active group membership (`RelayAuthError`). Exported in `core/connectivity/__init__.py`.
+- **`core/transport/session.py`**: `initiate_secure_session_on_connection(tcp_conn, ...)` — runs Phase 6 handshake over an existing `TCPConnection` (real socket or relayed tunnel) and wraps it in a `SecureSession`. `initiate_secure_session` now acts as a clean wrapper over this function. Exported in `core/transport/__init__.py`.
+- **`peer.py`**:
+  - `ConnectionManager.connect_via_relay_tunnel(r_addr_key, target_device_id, timeout)`: establishes an outgoing tunneled `SecureSession` to `target_device_id` through relay R (`r_addr_key`), verifies peer identity against expected target, registers the session under a collision-free `relay-<short_id>` key, and starts the background read loop.
+  - Incoming passive relayed connection handling: when an incoming `relay` chunk arrives with no pre-registered tunnel or pipe and connection limit is not exceeded, `ConnectionManager._read_loop` automatically accepts the incoming virtual connection via `accept_secure_session` in the background (passive B model — B is unprompted and needs no prior registration on R).
+  - `_tunnel_r_keys` mapping to automatically unregister underlying relay tunnels on session teardown.
+- **`ui.py`**:
+  - `_relay_candidate_queues` and `_relay_response_futures` for asynchronous candidate collection and response correlation.
+  - `_on_relay_candidate_query`: host-side silent gate (replies with `available=True` only if relay mode is active and requester is authorized).
+  - `_on_relay_candidate_response`: requester-side feeder into group-specific candidate queue.
+  - `_on_relay_response`: updated to resolve pending response futures for `_try_relay_connect` orchestration.
+  - `_try_relay_connect(target_device_id, group_id)`: full direct-then-relay orchestration:
+    1. Direct TCP connection attempt with `RELAY_DIRECT_TIMEOUT` (3s).
+    2. Relay candidate discovery: broadcasts `relay_candidate_query` to connected peers and gathers candidates within `RELAY_CANDIDATE_WINDOW` (0.5s).
+    3. Sequential trial: queries candidates with `relay_request` with `RELAY_RESPONSE_TIMEOUT` (3s) and opens a tunnel via `connect_via_relay_tunnel()` on accept.
+- 21 new tests across `tests/test_relay_pipe.py` (passive Bob e2e handshake and message passing), `tests/test_relay_authorization.py` (candidate query authorization and message validation), and `tests/test_relay_ui.py` (candidate queries, response queue feeding, direct and relay fallback connect orchestration) — total 40 relay tests passing.
+
+### Not yet done (46.4)
+- No `/group relay <id> on|off` command — `_relay_active_groups` is toggled programmatically until 46.4 adds the CLI command.
+
 ## [1.19.1] — Phase 46.2: relay_request wire protocol + R-side authorization
 
 ### Added

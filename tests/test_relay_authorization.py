@@ -204,3 +204,93 @@ def test_relay_response_missing_field_rejected():
     del msg["accepted"]
     with pytest.raises(ProtocolError):
         validate_message(msg)
+
+
+# ---------------------------------------------------------------------------
+# 4. Phase 46.3: authorize_relay_candidate_query() & candidate messages
+# ---------------------------------------------------------------------------
+
+
+def test_authorize_relay_candidate_query_happy_path(group_store, group_with_member, member_kp):
+    grp = group_with_member
+    from core.connectivity.relay import authorize_relay_candidate_query
+
+    authorize_relay_candidate_query(
+        group_id=grp.group_id,
+        requester_device_id=member_kp.device_id,
+        relay_active_groups={grp.group_id},
+        group_store=group_store,
+    )  # must not raise
+
+
+def test_authorize_relay_candidate_query_not_hosting(group_store, group_with_member, member_kp):
+    grp = group_with_member
+    from core.connectivity.relay import authorize_relay_candidate_query
+
+    with pytest.raises(RelayNotHostingError):
+        authorize_relay_candidate_query(
+            group_id=grp.group_id,
+            requester_device_id=member_kp.device_id,
+            relay_active_groups=set(),
+            group_store=group_store,
+        )
+
+
+def test_authorize_relay_candidate_query_not_member(group_store, group_with_member, outsider_kp):
+    grp = group_with_member
+    from core.connectivity.relay import authorize_relay_candidate_query
+
+    with pytest.raises(RelayAuthError):
+        authorize_relay_candidate_query(
+            group_id=grp.group_id,
+            requester_device_id=outsider_kp.device_id,
+            relay_active_groups={grp.group_id},
+            group_store=group_store,
+        )
+
+
+def test_make_relay_candidate_query_shape():
+    from core.protocol.messages import make_relay_candidate_query
+
+    msg = make_relay_candidate_query("group-1")
+    assert msg["type"] == "relay_candidate_query"
+    assert msg["group_id"] == "group-1"
+    validate_message(msg)
+
+
+def test_make_relay_candidate_response_shape():
+    from core.protocol.messages import make_relay_candidate_response
+
+    msg = make_relay_candidate_response("group-1", available=True)
+    assert msg["type"] == "relay_candidate_response"
+    assert msg["available"] is True
+    validate_message(msg)
+
+
+def test_relay_candidate_query_missing_or_empty_group_id():
+    from core.protocol.messages import make_relay_candidate_query
+
+    msg = make_relay_candidate_query("group-1")
+    msg["group_id"] = ""
+    with pytest.raises(ProtocolError):
+        validate_message(msg)
+
+    msg2 = make_relay_candidate_query("group-1")
+    del msg2["group_id"]
+    with pytest.raises(ProtocolError):
+        validate_message(msg2)
+
+
+def test_relay_candidate_response_validation():
+    from core.protocol.messages import make_relay_candidate_response
+
+    msg = make_relay_candidate_response("group-1", available=True)
+    msg["available"] = "yes"
+    with pytest.raises(ProtocolError):
+        validate_message(msg)
+
+    msg2 = make_relay_candidate_response("group-1", available=True)
+    del msg2["available"]
+    with pytest.raises(ProtocolError):
+        validate_message(msg2)
+

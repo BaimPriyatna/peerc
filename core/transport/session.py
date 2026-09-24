@@ -124,26 +124,17 @@ class SecureSession:
         )
 
 
-async def initiate_secure_session(
-    host: str,
-    port: int,
+async def initiate_secure_session_on_connection(
+    tcp_conn: TCPConnection,
     my_identity: DeviceKeypair,
     my_name: str,
     trust_store: Optional[TrustStore] = None,
-    connect_timeout: float = CONNECT_TIMEOUT,
     handshake_timeout: float = HANDSHAKE_TIMEOUT,
     nonce_cache: Optional[NonceCache] = None,
 ) -> SecureSession:
-    """Establish an outgoing secure session to a remote peer.
-
-    Workflow:
-        1. Open raw TCP connection (guarded by connect_timeout).
-        2. Perform mutual authenticated 3-way handshake (guarded by handshake_timeout).
-        3. Derive directional ChaCha20-Poly1305 session keys via HKDF.
-        4. Wrap in EncryptedTransport and return high-level SecureSession.
+    """Perform handshake over an established TCPConnection (real socket or
+    relayed tunnel) and wrap into a high-level SecureSession.
     """
-    tcp_conn = await open_tcp_connection(host, port, timeout=connect_timeout)
-
     try:
         handshake_res = await perform_handshake_initiator(
             reader=tcp_conn.reader,
@@ -167,6 +158,36 @@ async def initiate_secure_session(
     except Exception:
         await tcp_conn.close()
         raise
+
+
+async def initiate_secure_session(
+    host: str,
+    port: int,
+    my_identity: DeviceKeypair,
+    my_name: str,
+    trust_store: Optional[TrustStore] = None,
+    connect_timeout: float = CONNECT_TIMEOUT,
+    handshake_timeout: float = HANDSHAKE_TIMEOUT,
+    nonce_cache: Optional[NonceCache] = None,
+) -> SecureSession:
+    """Establish an outgoing secure session to a remote peer.
+
+    Workflow:
+        1. Open raw TCP connection (guarded by connect_timeout).
+        2. Perform mutual authenticated 3-way handshake (guarded by handshake_timeout).
+        3. Derive directional ChaCha20-Poly1305 session keys via HKDF.
+        4. Wrap in EncryptedTransport and return high-level SecureSession.
+    """
+    tcp_conn = await open_tcp_connection(host, port, timeout=connect_timeout)
+    return await initiate_secure_session_on_connection(
+        tcp_conn=tcp_conn,
+        my_identity=my_identity,
+        my_name=my_name,
+        trust_store=trust_store,
+        handshake_timeout=handshake_timeout,
+        nonce_cache=nonce_cache,
+    )
+
 
 
 async def accept_secure_session(

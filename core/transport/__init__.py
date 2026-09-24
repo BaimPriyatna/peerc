@@ -25,6 +25,7 @@ from .session import (
     SecureSessionManager,
     accept_secure_session,
     initiate_secure_session,
+    initiate_secure_session_on_connection,
 )
 from .tcp import (
     TCPConnection,
@@ -68,5 +69,6 @@ __all__ = [
     "SecureSession",
     "SecureSessionManager",
     "initiate_secure_session",
+    "initiate_secure_session_on_connection",
     "accept_secure_session",
 ]
