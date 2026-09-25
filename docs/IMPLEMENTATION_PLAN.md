@@ -1297,391 +1297,128 @@ Jangan menyimpan private key di SQLite.
 
 ## Phase 28 — Logging
 
-Gunakan:
+**Status:** design complete, no code yet. See `RELIABILITY_DESIGN.md`.
 
-```
-logging
-```
-
-Bukan `print()`.
-
-Level:
-
-```
-DEBUG
-INFO
-WARNING
-ERROR
-```
-
-Security-sensitive data jangan dilog:
-
-```
-private key
-session key
-plaintext secrets
-```
+Phase 28 defines one safe diagnostic logging policy around the existing
+sanitized `peerc.security` event logger. Ordinary logs are structured and
+redacted, use bounded local rotation, and never render in the Textual UI.
 
 ---
 
 ## Phase 29 — Testing
 
-Buat:
+**Status:** design complete, partially implemented. See
+`RELIABILITY_DESIGN.md`.
 
-```
-tests/
-├── unit/
-│   ├── test_protocol.py
-│   ├── test_identity.py
-│   ├── test_crypto.py
-│   ├── test_trust.py
-│   └── test_transfer.py
-│
-├── integration/
-│   ├── test_handshake.py
-│   ├── test_chat.py
-│   └── test_file_transfer.py
-│
-└── security/
-    ├── test_path_traversal.py
-    ├── test_replay.py
-    ├── test_invalid_signature.py
-    ├── test_oversized_transfer.py
-    └── test_revoked_device.py
-```
-
-**Status:** struktur formal di atas belum dibuat, tapi cakupan setara sudah
-ada secara flat di root repo: `test_security_fixes.py` (path traversal,
-oversized transfer, protocol schema) dan `test_upgrade_fixes.py` (connection
-limits/timeout, discovery validation). Reorganisasi ke struktur `tests/`
-di atas cocok dilakukan bersamaan dengan Phase 1.1 (pemisahan `protocol.py`
-ke `core/protocol/`).
+The flat test layout stays. Phase 29 adds test classification and missing
+reliability scenarios; it does not move files merely to match an old diagram.
 
 ---
 
 ## Phase 30 — Security test cases
 
-Wajib dites:
+**Status:** substantially implemented; reliability side-effect coverage remains.
+See `RELIABILITY_DESIGN.md`.
 
-Fake identity
-
-```
-Attacker claims device_id A
-→ reject
-```
-
-Invalid signature
-
-```
-modified handshake
-→ reject
-```
-
-MITM
-
-```
-A ↔ attacker ↔ B
-→ authentication failure
-```
-
-Replay
-
-```
-old handshake
-→ reject
-```
-
-Revoked key
-
-```
-valid signature + revoked device
-→ reject
-```
-
-Path traversal
-
-```
-../../file
-/etc/passwd
-C:\Windows\...
-
-→ reject.
-```
-
-**Status: sudah ditest** — lihat `test_security_fixes.py::test_path_traversal`.
-
-Oversized file
-
-```
-declared = 10 MB
-actual = 20 MB
-
-→ abort.
-```
-
-**Status: sudah ditest** — lihat `test_security_fixes.py::test_oversized_declared_then_overflow_chunk`.
-
-Corruption
-
-```
-modified chunk
-
-→ authentication/integrity failure.
-```
+Existing identity, signature, MITM, replay, revocation, traversal, size, and
+corruption coverage becomes a permanent regression suite. New tests verify
+that rejected input leaves no dangerous persisted or live state behind.
 
 ---
 
 ## Phase 31 — Performance
 
-Target:
+**Status:** design complete, foundations implemented. See
+`RELIABILITY_DESIGN.md`.
 
-```
-No Base64
-No giant JSON
-Streaming I/O
-```
-
-Pipeline:
-
-```
-Disk
- ↓
-64/256 KB buffer
- ↓
-Encrypt
- ↓
-TCP
-```
-
-Receiver:
-
-```
-TCP
- ↓
-Decrypt
- ↓
-Disk
-```
-
-Jangan:
-
-```
-entire file → RAM
-```
+Streaming binary transfer remains the design. This phase first measures
+throughput, memory, event-loop lag, handshake latency, and shutdown time;
+blocking file work is moved off the loop only when profiling supports it.
 
 ---
 
 ## Phase 32 — Concurrency
 
-Gunakan async untuk:
+**Status:** design complete, partially implemented. See
+`RELIABILITY_DESIGN.md`.
 
-```
-network
-connections
-transfer
-discovery
-```
-
-File hashing/I/O yang berat jangan menghambat event loop.
-
-Gunakan:
-
-```
-asyncio.to_thread()
-```
-
-atau executor jika diperlukan.
+Each background task gains an explicit owner, registry, cancellation path, and
+bounded cleanup. `asyncio.to_thread()` is reserved for measured blocking file
+work; locks are never held across I/O or user interaction.
 
 ---
 
 ## Phase 33 — Protocol state machine
 
-Ini akan membuat implementation jauh lebih aman.
+**Status:** design complete, no explicit FSM yet. See
+`RELIABILITY_DESIGN.md`.
 
-Connection:
-
-```
-CONNECTED
-   ↓
-HANDSHAKING
-   ↓
-AUTHENTICATED
-   ↓
-ESTABLISHED
-   ↓
-CLOSING
-   ↓
-CLOSED
-```
-
-Tidak boleh:
-
-```
-CONNECTED → FILE_DATA
-```
-
-sebelum:
-
-```
-ESTABLISHED
-```
-
-Ini juga prasyarat untuk menyelesaikan sisa BUG-014 (handshake timeout) —
-tanpa state machine ini, tidak ada tempat yang jelas untuk menaruh timer
-"belum ESTABLISHED dalam N detik → drop".
+The connection lifecycle is guarded from `NEW` through `CLOSED`; application
+frames cannot arrive before an authenticated established transport. Trust state
+remains separate so this phase does not silently alter existing `PENDING`
+session behavior.
 
 ---
 
 ## Phase 34 — Transfer state machine
 
-```
-OFFERED
-   ↓
-ACCEPTED
-   ↓
-TRANSFERRING
-   ↓
-VERIFYING
-   ↓
-COMPLETED
-```
+**Status:** design complete, implicit states implemented. See
+`RELIABILITY_DESIGN.md`.
 
-Failure:
-
-```
-REJECTED
-CANCELLED
-FAILED
-EXPIRED
-```
-
-Resume:
-
-```
-PAUSED
- ↓
-RESUMING
- ↓
-TRANSFERRING
-```
+Outgoing and incoming transfers receive guarded transitions with idempotent
+terminal states. Late or duplicate frames cannot revive a transfer or overwrite
+a verified destination.
 
 ---
 
 ## Phase 35 — Error protocol
 
-Jangan lagi silent failure.
+**Status:** design complete, primitive exists. See `RELIABILITY_DESIGN.md`.
 
-Buat:
-
-```json
-{
-  "type": "error",
-  "code": "AUTH_FAILED",
-  "message": "Authentication failed"
-}
-```
-
-Codes:
-
-```
-AUTH_FAILED
-DEVICE_REVOKED
-PROTOCOL_MISMATCH
-INVALID_FRAME
-TRANSFER_NOT_FOUND
-SIZE_EXCEEDED
-DISK_FULL
-CHECKSUM_MISMATCH
-TRANSFER_EXPIRED
-```
-
-`protocol.py` sudah punya `make_error()` sebagai starting point.
+`make_error()` becomes a validated, encrypted post-handshake application
+response with safe correlation context. Existing command-specific negative
+responses remain authoritative and are never duplicated with a generic error.
 
 ---
 
 ## Phase 36 — CLI/UI
 
-Target command:
+**Status:** design complete, no code yet. See `TRUST_UX_DESIGN.md`.
 
-```
-/pairs
-/devices
-/trust <id>
-/revoke <id>
-/connect <ip>
-/send <file>
-/cancel <transfer>
-/resume <transfer>
-/nick <name>
-```
+Phase 36 adds the Trust Center: read-only device inventory first, then
+explicit approval and local revocation. Commands `/devices`, `/devices pending`,
+`/trust <id>`, and `/revoke <id> [reason]` open or operate on the same Trust
+Center model; `/pairs` is retained only as an alias for `/devices`.
 
-Contoh:
-
-```
-Devices
-
-✓ Baim Laptop
-  192.168.1.20
-  Trusted
-
-? Android
-  192.168.1.31
-  Pending
-
-✗ Old Laptop
-  Revoked
-```
+Existing `/connect`, transfer commands, and `/nick` stay in their own flows.
+They are not part of this security/trust UX phase.
 
 ---
 
 ## Phase 37 — Security UX
 
-Ketika device baru:
+**Status:** design complete, no code yet. See `TRUST_UX_DESIGN.md`.
 
-```
-New device detected
-
-Name: Android
-Device ID: 91C3...
-Fingerprint:
-A2:73:19:...
-
-[Trust] [Reject]
-```
-
-Kalau key berubah:
-
-```
-⚠ SECURITY WARNING
-
-Device "Android" changed identity.
-
-Previous fingerprint:
-A2:73:19:...
-
-New fingerprint:
-71:9F:22:...
-
-Possible reasons:
-• device reinstalled
-• key rotated
-• identity compromised
-
-[Trust New Key]
-[Reject]
-```
-
-Ini jauh lebih penting daripada sekadar membuat crypto kuat.
+Phase 37 turns `TrustRequired` from a log-only notification into a queued,
+non-blocking prompt and adds a read-only Security Events view. A key mismatch
+is already rejected by the handshake and must remain a warning, not a
+"Trust New Key" choice. Legitimate continuity is handled only by a verified
+Phase 40 transition certificate.
 
 ---
 
 ## Phase 38 — One-Shot Final Refactor
 
-*(Supersedes the original speculative structure below this note's commit —
-that early draft predates most of Phases 6-46 and no longer matches the
-actual repo layout. See "Why Phase 38 isn't done yet" in `ROADMAP.md` for
-why this phase is deliberately deferred until Phase 44-46 (`core/connectivity/`)
-also land, so the one-shot restructure below doesn't need a second pass.)*
+**Status:** design resolved, intentionally deferred. See
+`PROJECT_STRUCTURE_DESIGN.md`.
+
+The original structure draft below is archived reference material and is
+superseded by `PROJECT_STRUCTURE_DESIGN.md`; it predates most of Phases 6-46.
+The current repository already has canonical `core` packages, including
+`core/connectivity/`; Phase 38 now only migrates the remaining root
+implementations into `app/`, `core.discovery`, `core.messaging`,
+`core.transfer.session`, and `core.transport.manager`. It starts only after
+Phases 36/37 and 28-35 stabilize their public workflows.
 
 **Tujuan:** setelah refactor selesai, struktur langsung menjadi final dan
 seluruh legacy root module hanya menjadi compatibility shim.
@@ -2040,7 +1777,8 @@ verify," just for two different kinds of change (locator vs. identity
 key). See `INTERNET_CONNECTIVITY_DESIGN.md`'s dedicated section on why
 this matters more over the Internet than on a LAN.
 
-**Status:** design complete, no code yet.
+**Status:** complete (`1.18.0`–`1.18.5`). Locator storage, signed endpoint
+updates, Add-by-Link, and live-protocol integration are implemented.
 
 ## Phase 45 — Rendezvous Service
 
@@ -2051,7 +1789,8 @@ locator. Chat/file traffic never routes through it.
 - Can be self-hosted, separate from Group Authority (Phase 42) — one
 server doesn't have to do both jobs.
 
-**Status:** design complete, no code yet.
+**Status:** complete (`1.18.6`–`1.18.8`). Active group members can host
+in-memory endpoint lookup with `/group rendezvous <id> on|off|find <device>`.
 
 ## Phase 46 — NAT Traversal & Relay Fallback
 
@@ -2063,7 +1802,9 @@ prevents a direct path.
 - Relay only ever sees already-encrypted (Phase 8) ciphertext — never
 session plaintext.
 
-**Status:** design complete, no code yet.
+**Status:** complete (`1.19.0`–`1.19.3`). Direct connections are tried
+first; fallback discovers live relay hosts by broadcasting to connected
+peers, so Relay mode has no dependency on Rendezvous mode.
 
 ---
 
@@ -2107,11 +1848,11 @@ seperti ini:
         ↓
 17. Group-Gated Export Authorization    ✅ selesai (Phase 43, 1.17.0)
         ↓
-18. Internet P2P Connectivity           ⏳ belum ← kita di sini (Phase 44 — INTERNET_CONNECTIVITY_DESIGN.md)
+18. Internet P2P Connectivity           ✅ selesai (Phase 44, 1.18.0–1.18.5)
         ↓
-19. Rendezvous Service (optional)       🟡 desain lengkap, belum ada kode (Phase 45)
+19. Rendezvous Service (optional)       ✅ selesai (Phase 45, 1.18.6–1.18.8)
         ↓
-20. NAT Traversal & Relay (optional)    🟡 desain lengkap, belum ada kode (Phase 46)
+20. NAT Traversal & Relay (optional)    ✅ selesai (Phase 46, 1.19.0–1.19.3)
         ↓
 21. UI security/trust UX                ⏳ belum (Phase 36/37)
         ↓

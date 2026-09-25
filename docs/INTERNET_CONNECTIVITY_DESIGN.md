@@ -1,6 +1,7 @@
 # Internet P2P Connectivity
 
-Status: **design, no code yet** — reference for Phase 44-46
+Status: **implemented for Phase 44-46** — reference design and behavior
+record for those phases
 (`IMPLEMENTATION_PLAN.md`). Adapted from the provided specification;
 project name aligned to `peerc`. The Device Key Rotation integration
 question is resolved explicitly (§Endpoint Update and Key Rotation) per
@@ -372,6 +373,14 @@ Try Direct → SUCCESS → Direct P2P
 
 Relay hanya menjadi transport. Payload tetap E2E encrypted — relay
 tidak memperoleh session plaintext.
+
+Relay hosting bersifat opt-in per group dan independen dari Rendezvous:
+`/group relay <group_id> on|off`. Ketika direct connection gagal, peer A
+mengirim `relay_candidate_query` ke peer yang sudah terhubung dan hanya
+relay aktif yang mengirim `relay_candidate_response`. Discovery ini memakai
+status koneksi saat ini, bukan cache `rendezvous_lookup`, sehingga Relay
+tetap dapat digunakan tanpa host Rendezvous dan tidak mengubah independensi
+dua toggle tersebut. Kandidat yang merespons dicoba satu per satu.
 
 ---
 

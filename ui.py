@@ -70,6 +70,8 @@ import file_transfer
 import protocol
 from core.trust.store import DEFAULT_DB_PATH as TRUST_DB_LEGACY_PATH
 from core.trust.store import TrustStore
+from core.trust.device import TrustedDevice, TrustStatus
+from core.identity.fingerprint import format_fingerprint, short_fingerprint
 from core.group import (
     AdminStatus,
     DEFAULT_CAPABILITY_TTL,
@@ -319,6 +321,189 @@ def _parse_endpoint_line(line: str, device_id: str) -> Endpoint:
         return Endpoint(device_id=device_id, kind=kind, host=host, port=port)
     except LocatorError as e:
         raise ValueError(str(e)) from e
+
+
+# ---------------------------------------------------------------------------
+# Phase 36.1: Trust Center — read-only device inventory helpers
+# ---------------------------------------------------------------------------
+
+
+def _format_relative_time(ts: float) -> str:
+    """Human-readable relative timestamp — 'just now', '3 min ago', etc."""
+    import time as _time
+    delta = _time.time() - ts
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        m = int(delta / 60)
+        return f"{m} min ago"
+    if delta < 86400:
+        h = int(delta / 3600)
+        return f"{h}h ago"
+    d = int(delta / 86400)
+    return f"{d}d ago"
+
+
+class TrustCenterModal(ModalScreen[None]):
+    """Phase 36.1: Read-only Trust Center — lists all known devices with
+    status filters (All / Pending / Trusted / Revoked).  A device row can
+    be clicked to open TrustDeviceDetailModal for the full fingerprint and
+    metadata.  Actions (Trust/Reject/Revoke) are added in Phase 36.2
+    (1.20.1); this sub-step is deliberately read-only.
+
+    Vault-locked guard: if trust_store is None when this modal is
+    composing, it shows a 'Vault is locked' message and a Close button.
+    """
+
+    # Internal filter: None = all, or a TrustStatus
+    def __init__(self, filter_status: "Optional[TrustStatus]" = None) -> None:
+        super().__init__()
+        self._filter = filter_status
+        self._devices: list[TrustedDevice] = []
+
+    def compose(self) -> ComposeResult:
+        title = "Trust Center — "
+        if self._filter is None:
+            title += "All Devices"
+        else:
+            title += self._filter.value.capitalize() + " Devices"
+        with Vertical(id="trust-center-dialog"):
+            yield Label(f"[bold]{title}[/bold]")
+            with Horizontal(id="trust-center-filter"):
+                yield Button("All", id="tc-filter-all", variant="primary" if self._filter is None else "default")
+                yield Button("⏳ Pending", id="tc-filter-pending",
+                             variant="warning" if self._filter == TrustStatus.PENDING else "default")
+                yield Button("✓ Trusted", id="tc-filter-trusted",
+                             variant="success" if self._filter == TrustStatus.TRUSTED else "default")
+                yield Button("✗ Revoked", id="tc-filter-revoked",
+                             variant="error" if self._filter == TrustStatus.REVOKED else "default")
+            yield ListView(id="trust-center-list")
+            yield Label("", id="trust-center-empty")
+            yield Button("Close", id="tc-close")
+
+    def on_mount(self) -> None:
+        self._load_devices()
+
+    def _load_devices(self) -> None:
+        app: ChatApp = self.app  # type: ignore[assignment]
+        list_view = self.query_one("#trust-center-list", ListView)
+        empty_label = self.query_one("#trust-center-empty", Label)
+        list_view.clear()
+
+        if app.trust_store is None:
+            empty_label.update("[red]Vault is locked — unlock to view devices.[/red]")
+            return
+
+        try:
+            self._devices = app.trust_store.list_all(status=self._filter)
+        except Exception:
+            empty_label.update("[red]Could not read trust store.[/red]")
+            return
+
+        if not self._devices:
+            filter_name = (self._filter.value.lower() + " ") if self._filter else ""
+            empty_label.update(f"[dim]No {filter_name}devices.[/dim]")
+            return
+
+        empty_label.update("")
+        for dev in self._devices:
+            if dev.status == TrustStatus.PENDING:
+                icon = "[yellow]⏳[/yellow]"
+            elif dev.status == TrustStatus.TRUSTED:
+                icon = "[green]✓[/green]"
+            else:
+                icon = "[red]✗[/red]"
+            last = _format_relative_time(dev.last_seen)
+            label = (
+                f"{icon} [bold]{dev.name}[/bold]  "
+                f"[dim]{dev.device_id[:8]}[/dim]  "
+                f"[dim]{dev.status.value}[/dim]  "
+                f"[dim]last seen {last}[/dim]"
+            )
+            list_view.append(ListItem(Label(label), name=dev.device_id))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn = event.button.id
+        if btn == "tc-close":
+            self.dismiss()
+            return
+        if btn == "tc-filter-all":
+            self._filter = None
+        elif btn == "tc-filter-pending":
+            self._filter = TrustStatus.PENDING
+        elif btn == "tc-filter-trusted":
+            self._filter = TrustStatus.TRUSTED
+        elif btn == "tc-filter-revoked":
+            self._filter = TrustStatus.REVOKED
+        # Refresh filter buttons styling by re-composing is complex;
+        # instead just reload the list; user sees the result immediately.
+        self._load_devices()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Open device detail when a row is clicked/selected."""
+        device_id = event.item.name
+        if device_id is None:
+            return
+        app: ChatApp = self.app  # type: ignore[assignment]
+        if app.trust_store is None:
+            return
+        dev = app.trust_store.get(device_id)
+        if dev is None:
+            return
+        self.app.push_screen(TrustDeviceDetailModal(dev))
+
+
+class TrustDeviceDetailModal(ModalScreen[None]):
+    """Phase 36.1: Detail view for a single trusted/pending/revoked device.
+    Read-only — shows full device_id, public-key fingerprint (derived from
+    device_id as SHA256 of pubkey), first/last seen, status, and revocation
+    metadata.  A 'Copy Fingerprint' control lets the user copy it for an
+    out-of-band comparison.  Action buttons (Trust/Reject/Revoke) are added
+    in Phase 36.2 (1.20.1).
+    """
+
+    def __init__(self, device: TrustedDevice) -> None:
+        super().__init__()
+        self._device = device
+
+    def compose(self) -> ComposeResult:
+        dev = self._device
+        full_fp = format_fingerprint(dev.device_id)
+        short_fp = short_fingerprint(dev.device_id)
+
+        if dev.status == TrustStatus.PENDING:
+            status_label = "[yellow]⏳ PENDING[/yellow] — awaiting your approval"
+        elif dev.status == TrustStatus.TRUSTED:
+            status_label = "[green]✓ TRUSTED[/green] — identity verified and approved"
+        else:
+            status_label = "[red]✗ REVOKED[/red] — future handshakes rejected"
+
+        with Vertical(id="trust-detail-dialog"):
+            yield Label(f"[bold]Device: {dev.name}[/bold]")
+            yield Label(f"Status: {status_label}")
+            yield Label(f"Device ID:  [dim]{dev.device_id}[/dim]")
+            yield Label("Fingerprint (for out-of-band comparison):")
+            yield Label(full_fp, id="trust-detail-fingerprint")
+            yield Label(
+                f"First seen: {_format_relative_time(dev.first_seen)}  "
+                f"| Last seen: {_format_relative_time(dev.last_seen)}"
+            )
+            if dev.status == TrustStatus.REVOKED and dev.revoked_by:
+                yield Label(
+                    f"Revoked by: {dev.revoked_by}"
+                    + (f"  Reason: {dev.revoke_reason}" if dev.revoke_reason else "")
+                )
+            with Horizontal(id="trust-detail-actions"):
+                yield Button("Copy Fingerprint", id="td-copy-fp")
+                yield Button("Close", id="td-close")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "td-close":
+            self.dismiss()
+        elif event.button.id == "td-copy-fp":
+            full_fp = format_fingerprint(self._device.device_id)
+            self.app.copy_to_clipboard(full_fp)
+            self.notify("Fingerprint copied to clipboard.", title="Copied")
 
 
 class NameSetupModal(ModalScreen[str]):
@@ -750,6 +935,34 @@ class ChatApp(App):
         text-align: center;
         text-style: bold;
     }
+    #trust-center-dialog {
+        align: center middle;
+        background: $panel;
+        border: thick $accent;
+        padding: 1 2;
+        width: 80;
+        height: 28;
+    }
+    #trust-center-list { height: 1fr; border: solid $accent; margin-top: 1; }
+    #trust-center-filter { margin-bottom: 1; }
+    #trust-center-filter Button { margin-right: 1; }
+    #trust-center-empty { color: $text-muted; margin: 1 0; }
+    #trust-detail-dialog {
+        align: center middle;
+        background: $panel;
+        border: thick $accent;
+        padding: 1 2;
+        width: 76;
+        height: auto;
+    }
+    #trust-detail-dialog Label { margin-top: 1; }
+    #trust-detail-fingerprint {
+        padding: 1;
+        border: solid $accent;
+        margin: 1 0;
+        text-style: bold;
+    }
+    #trust-detail-actions Button { margin-right: 1; margin-top: 1; }
     Screen > .screen--selection {
         background: $primary;
         color: $text;
@@ -1438,6 +1651,8 @@ class ChatApp(App):
             await self._handle_group_caps(rest, extra)
         elif subcmd == "rendezvous":
             await self._handle_group_rendezvous(rest, extra)
+        elif subcmd == "relay":
+            await self._handle_group_relay(rest, extra)
         else:
             self._log(f"[yellow]Unknown group subcommand: '{subcmd}'. Type /help for usage.[/yellow]")
 
@@ -3271,6 +3486,28 @@ class ChatApp(App):
         else:
             self._log("[yellow]Usage: /group rendezvous <group_id> on|off|find <device_id>[/yellow]")
 
+    async def _handle_group_relay(self, group_id: str, extra: str) -> None:
+        """/group relay <group_id> on|off"""
+        if not group_id:
+            self._log("[yellow]Usage: /group relay <group_id> on|off[/yellow]")
+            return
+        if self.group_store.get_group(group_id) is None:
+            self._log(f"[red]Unknown group_id: {group_id}[/red]")
+            return
+
+        mode = extra.strip().lower()
+        if mode == "on":
+            if self.group_store.get_membership_status(group_id, self.peer_id) != MembershipStatus.ACTIVE:
+                self._log("[red]You must be an active member of this group to host relay for it.[/red]")
+                return
+            self._relay_active_groups.add(group_id)
+            self._log(f"[green]Relay mode ON for group {group_id[:8]}... — relaying encrypted group traffic.[/green]")
+        elif mode == "off":
+            self._relay_active_groups.discard(group_id)
+            self._log(f"[yellow]Relay mode OFF for group {group_id[:8]}...[/yellow]")
+        else:
+            self._log("[yellow]Usage: /group relay <group_id> on|off[/yellow]")
+
     async def _send_self_endpoint_update(self, addr_key: str) -> None:
         """Phase 44.4: right after a hello/hello_ack handshake completes,
         announce our own current reachable address(es) to the peer we
@@ -3345,14 +3582,13 @@ class ChatApp(App):
         self._log(f"[{color}][bold]SECURITY {evt.severity}:[/bold] {evt.event_type}{peer_info}[/{color}]")
 
     def _on_trust_required(self, evt: TrustRequired) -> None:
-        # BUG-004: the connection is already allowed to proceed (handshake.py
-        # itself returns PENDING rather than rejecting) — this is a
-        # notification, not a gate. A real approve/reject flow is Phase
-        # 36/37, tracked separately in docs/ROADMAP.md; for now the user
-        # just sees that a new, not-yet-trusted device connected.
+        # Retain the log entry as an audit-friendly signal (Phase 37.1 adds
+        # the queued TrustPromptModal on top of this; for 1.20.0 the log is
+        # the only notification, same as before, but now points at /devices).
         self._log(
             f"[yellow]New device seen for the first time: [bold]{evt.peer_name}[/bold] "
-            f"({evt.peer_id[:8]}) — not yet trusted.[/yellow]"
+            f"({evt.peer_id[:8]}) — not yet trusted. "
+            f"Use [bold]/devices pending[/bold] to review.[/yellow]"
         )
 
     async def _prune_ui_loop(self) -> None:
@@ -3494,6 +3730,9 @@ class ChatApp(App):
             self._log(" [bold cyan]/clear[/bold cyan]                Clear chat log screen")
             self._log(" [bold cyan]/info[/bold cyan] or [bold cyan]/me[/bold cyan]           Show self identity & network details")
             self._log("[dim cyan]───────────────────── Vault & Security ──────────────────[/dim cyan]")
+            self._log(" [bold cyan]/devices [pending][/bold cyan]    Open Trust Center (all or pending-only filter)")
+            self._log(" [bold cyan]/pairs[/bold cyan]                Alias for /devices")
+            self._log(" [bold cyan]/trust \u003cdevice_id\u003e[/bold cyan]      Open device detail view")
             self._log(" [bold cyan]/lock[/bold cyan]                 Lock vault now (Ctrl+L); re-prompt for passphrase")
             self._log(" [bold cyan]/autolock [minutes][/bold cyan]  Show/set idle auto-lock (default 5; 0 = off)")
             self._log(" [bold cyan]/criticalkey [action][/bold cyan] Manage optional Export extra key")
@@ -3522,6 +3761,7 @@ class ChatApp(App):
             self._log(" [bold cyan]/group caps [id][/bold cyan]         List active export capabilities")
             self._log(" [bold cyan]/group rendezvous <id> on|off[/bold cyan] Host endpoint relay for a group")
             self._log(" [bold cyan]/group rendezvous <id> find <dev>[/bold cyan] Ask connected group-mates where <dev> is")
+            self._log(" [bold cyan]/group relay <id> on|off[/bold cyan]      Relay encrypted traffic for a group")
             self._log("[dim cyan]────────────────────────────────────────────────────────[/dim cyan]")
             self._log(" [bold cyan]/quit[/bold cyan] or [bold cyan]/exit[/bold cyan]          Exit application")
             self._log("[bold yellow]╚═══════════════════════ Shortcuts ══════════════════════╝[/bold yellow]")
@@ -3764,6 +4004,12 @@ class ChatApp(App):
         elif cmd == "/delete":
             await self._handle_delete_file(arg)
 
+        elif cmd in ("/devices", "/pairs"):
+            await self._cmd_devices(arg)
+
+        elif cmd == "/trust":
+            await self._cmd_trust_detail(arg)
+
         elif cmd in ("/groups", "/group"):
             await self._handle_group_command(arg)
 
@@ -3772,6 +4018,52 @@ class ChatApp(App):
 
         else:
             self._log(f"[red]Unknown command: {cmd}. Type /help for command list.[/red]")
+
+    # -----------------------------------------------------------------------
+    # Phase 36.1: Trust Center read-only commands
+    # -----------------------------------------------------------------------
+
+    async def _cmd_devices(self, arg: str) -> None:
+        """/devices [pending] or /pairs [pending]"""
+        if self.trust_store is None:
+            self._log("[red]Vault is locked — unlock vault first with /unlock.[/red]")
+            return
+        arg_clean = arg.strip().lower()
+        filter_status: Optional[TrustStatus] = None
+        if arg_clean == "pending":
+            filter_status = TrustStatus.PENDING
+        elif arg_clean and arg_clean != "all":
+            self._log(f"[yellow]Unknown filter '{arg_clean}'. Usage: /devices [pending][/yellow]")
+            return
+        self.push_screen(TrustCenterModal(filter_status=filter_status))
+
+    async def _cmd_trust_detail(self, arg: str) -> None:
+        """/trust <device_id> — open device detail view"""
+        if self.trust_store is None:
+            self._log("[red]Vault is locked — unlock vault first with /unlock.[/red]")
+            return
+        prefix = arg.strip()
+        if not prefix:
+            self._log("[yellow]Usage: /trust <device_id>[/yellow]")
+            return
+
+        all_devices = self.trust_store.list_all()
+        # Exact match or unique prefix match
+        matches = [d for d in all_devices if d.device_id.lower().startswith(prefix.lower())]
+        if not matches:
+            self._log(f"[red]Device '{prefix}' not found in trust store.[/red]")
+            return
+        if len(matches) > 1:
+            exact = [d for d in matches if d.device_id.lower() == prefix.lower()]
+            if len(exact) == 1:
+                target = exact[0]
+            else:
+                self._log(f"[yellow]Ambiguous device prefix '{prefix}' ({len(matches)} matches). Specify more characters.[/yellow]")
+                return
+        else:
+            target = matches[0]
+
+        self.push_screen(TrustDeviceDetailModal(target))
 
 
 def main() -> None:

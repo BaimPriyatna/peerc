@@ -8,7 +8,7 @@
 [![Tests](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml/badge.svg)](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.19.2-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.20.0-informational.svg)](CHANGELOG.md)
 
 A terminal-based peer-to-peer chat and file transfer application. No central server — peers discover each other directly over the local network (LAN or WiFi hotspot) and communicate directly over encrypted TCP connections.
 
@@ -173,6 +173,9 @@ Type any command into the bottom input box and press Enter:
 | `/copy [all\|last]` | Copy the last message or the full chat log to the clipboard |
 | `/clear` | Clear the visible chat log |
 | `/info` (or `/me`) | Display local identity, IP, gateway, and listening ports |
+| `/devices [pending]` | Open Trust Center dialog (all or pending-only filter) |
+| `/pairs` | Alias for `/devices` |
+| `/trust <device_id>` | Open detailed device view with public-key fingerprint |
 | `/quit` (or `/exit`) | Quit peerc |
 
 Anything that is not a `/` command is sent as a chat message to the active peer. Sent messages display delivery status alongside them.
@@ -246,7 +249,7 @@ The full suite also runs automatically in CI on every push to `main`. See `.gith
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for phased progress and [`CHANGELOG.md`](CHANGELOG.md) for a full version history.
 
-Current version: **1.19.1** — Phase 39 (Secure Storage) complete! All 5
+Current version: **1.20.0** — Phase 36.1 (Trust Center Inventory) complete!
 sub-steps done: vault envelope encryption, encrypted database with
 chat/transfer persistence, session/auto-lock model, critical-action Export
 key, and file actions (Open/Export/Delete/Move with executable detection).
@@ -271,8 +274,7 @@ tracking, separate from identity), signed Endpoint Update (now wired into
 every connection — LAN, `/connect`, or Add-by-Link all leave a
 cryptographically-confirmed, reusable locator entry), and Add-by-Link
 (`/link`, Ctrl+G, or the sidebar button — generate or redeem a
-PIN-protected `PEERC1:` connection link, click-driven) are all done. Next
-up: Phase 46 (NAT Traversal & Relay, optional).
+PIN-protected `PEERC1:` connection link, click-driven) are all done.
 
 Phase 45 (Rendezvous) is done: own-IP-change detection with automatic
 re-announcement to connected peers, plus opt-in per-group endpoint
@@ -281,6 +283,12 @@ who aren't currently connected — any active group member can host, no
 new crypto (the host only relays already-signed Endpoint Updates, the
 requester re-verifies everything itself against the group's membership
 records).
+
+Phase 46 (optional Relay fallback) is also complete: peerc tries a direct
+connection first, then discovers live relay hosts by broadcasting to peers
+already connected to the group. Relay hosting is opt-in per group with
+`/group relay <id> on|off` and stays independent from Rendezvous hosting;
+the relay only forwards end-to-end encrypted traffic.
 
 ---
 

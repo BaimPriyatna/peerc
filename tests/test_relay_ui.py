@@ -66,6 +66,55 @@ def relay_app(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Phase 46.4: /group relay <id> on|off
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_relay_on_unknown_group_refused(relay_app):
+    await relay_app._handle_group_relay("nonexistent-group", "on")
+
+    assert "nonexistent-group" not in relay_app._relay_active_groups
+    assert any("Unknown group_id" in message for message in relay_app.logs)
+
+
+@pytest.mark.asyncio
+async def test_relay_on_not_a_member_refused(relay_app):
+    other_group = create_group(relay_app._keypair_b, name="Other Group")
+    relay_app.group_store.create_group(other_group)
+
+    await relay_app._handle_group_relay(other_group.group_id, "on")
+
+    assert other_group.group_id not in relay_app._relay_active_groups
+    assert any("active member" in message for message in relay_app.logs)
+
+
+@pytest.mark.asyncio
+async def test_relay_on_off_are_independent_from_rendezvous(relay_app):
+    group_id = relay_app._group.group_id
+
+    await relay_app._handle_group_relay(group_id, "on")
+
+    assert group_id in relay_app._relay_active_groups
+    assert group_id not in relay_app._rendezvous_active_groups
+    assert any("Relay mode ON" in message for message in relay_app.logs)
+
+    await relay_app._handle_group_relay(group_id, "off")
+
+    assert group_id not in relay_app._relay_active_groups
+    assert group_id not in relay_app._rendezvous_active_groups
+    assert any("Relay mode OFF" in message for message in relay_app.logs)
+
+
+@pytest.mark.asyncio
+async def test_relay_invalid_mode_shows_usage(relay_app):
+    await relay_app._handle_group_relay(relay_app._group.group_id, "find device")
+
+    assert relay_app._group.group_id not in relay_app._relay_active_groups
+    assert any("Usage: /group relay" in message for message in relay_app.logs)
+
+
+# ---------------------------------------------------------------------------
 # Host (R) side: _on_relay_request
 # ---------------------------------------------------------------------------
 

@@ -132,6 +132,8 @@ endpoint_update.py` for the shape to copy.
 | `1.19.0` | 46.1 | Phase 46.1: relay-tunnel primitive — `TYPE_RELAY` payload marker in `EncryptedTransport`, duck-typed `RelayedStreamReader`/`RelayedStreamWriter` shim, `ConnectionManager` forwarding pipe (`open_relay_pipe`/`close_relay_pipe`) and tunnel registration (`register_relay_tunnel`/`open_relay_tunnel`). Proven end-to-end with real handshake and encrypted messages running through relay tunnel |
 | `1.19.1` | 46.2 | Phase 46.2: `relay_request`/`relay_response` wire messages with validation, `authorize_relay_request()` in `core/connectivity/relay.py` (relay mode check, active member check, target reachability check), wired into `ui.py` (`_on_relay_request`, `_on_relay_response`), silent refusal gates, explicit negative replies, and happy-path `open_relay_pipe` |
 | `1.19.2` | 46.3 | Phase 46.3: A-side direct-then-relay orchestration — `make_relay_candidate_query`/`make_relay_candidate_response` wire messages, `authorize_relay_candidate_query()`, `initiate_secure_session_on_connection()` refactor, `ConnectionManager.connect_via_relay_tunnel()`, incoming passive relay accept at B, and `ui.py`'s `_try_relay_connect()` orchestration with candidate broadcast, collection window, sequential query, and tunnel handshake |
+| `1.19.3` | 46.4 | Phase 46.4: `/group relay <id> on|off` enables or disables in-memory relay hosting for an active group, independently of Rendezvous. Completes Phase 46 |
+| `1.20.0` | 36.1 | Phase 36.1: Trust Center read-only device inventory (`/devices [pending]`, `/pairs`, `/trust <id>`, `TrustCenterModal`, `TrustDeviceDetailModal`; status filters, safe empty and vault-locked states, fingerprint clipboard copy) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -146,7 +148,7 @@ are complete.**
 
 | Phase | What | Where |
 |---|---|---|
-| 46 | NAT Traversal & Relay Fallback (optional, relay only sees ciphertext) | `INTERNET_CONNECTIVITY_DESIGN.md` §Optional Relay |
+| 46 | NAT Traversal & Relay Fallback (optional, relay only sees ciphertext) | Complete (`1.19.0`–`1.19.3`) |
 | — | File Viewer (In-memory streaming viewer: Text/Code, Media/Image/Audio, Document/PDF/EPUB) | `FILE_VIEWER_DESIGN.md` — architecture, open-source stack (PyMuPDF, Chafa/Kitty, miniaudio/mpv, Rich), zero-disk-cache security pipeline |
 
 Phase 39 absorbs Phase 27 (Storage) — there's no plan to ship an
@@ -216,12 +218,15 @@ Resolved with Baim as follows:
   `/group rendezvous ... on|off`. Relaying carries live bandwidth
   traffic — a heavier commitment than caching a small `EndpointUpdate`
   blob — so a device can enable Rendezvous without Relay, or vice versa.
-- **Finding an available relay: reuse `rendezvous_lookup`.** When A
-  can't reach B directly, A asks a group-mate currently in Relay-mode to
-  bridge the connection. If multiple group-mates are in Relay-mode, A
-  tries them one at a time — sequential, short timeout each, same
-  pattern as the direct-connect attempt — rather than in parallel, to
-  avoid managing several half-open relay attempts at once.
+- **Finding an available relay: live broadcast to connected peers.** When
+  A can't reach B directly, A broadcasts `relay_candidate_query(group_id)`
+  to its already-connected peers. Only authorized peers that currently have
+  Relay mode enabled reply with `relay_candidate_response(available=true)`.
+  This keeps Relay independent of Rendezvous: relay hosting can be enabled
+  even when no one hosts Rendezvous, and the fast-changing relay status is
+  queried live rather than inferred from a location cache. A tries the
+  responding candidates one at a time with a short timeout, avoiding
+  multiple half-open relay attempts.
 - **Relay protocol: pure byte-pipe, no chaining.** A sends
   `relay_request(target_device_id)` to relay R over their already-
   authenticated A↔R session (no separate signature needed — the session
@@ -261,9 +266,9 @@ Resolved with Baim as follows:
   mechanism.
 - **Scope relative to Rendezvous:** the two roles are independent but
   composable. A device can be a Rendezvous host, a Relay, both, or
-  neither; finding a relay candidate reuses the existing
-  `rendezvous_lookup` machinery rather than inventing a second discovery
-  mechanism.
+  neither. Relay-candidate broadcast uses its own two small messages
+  because candidate availability is live connection state, not cached
+  endpoint-location data.
 
 Sub-steps (see `CHANGELOG.md` for full detail on each):
 - **46.1 (`1.19.0`, done)** — the relay-tunnel primitive itself: a third
@@ -296,8 +301,9 @@ Sub-steps (see `CHANGELOG.md` for full detail on each):
   and try them sequentially with `relay_request`, opening a tunnel via
   `connect_via_relay_tunnel()` once a relay accepts. Passive B accepts incoming
   relayed connections automatically.
-- **46.4** — `/group relay <id> on|off` toggle and wiring it to gate
-  whether 46.2's authorization check can ever say yes.
+- **46.4 (`1.19.3`, done)** — `/group relay <id> on|off` toggles
+  in-memory relay hosting for active members only, separately from
+  Rendezvous mode. This completes Phase 46.
 
 ## Next up (recommended order)
 
@@ -305,26 +311,27 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. **Phase 45 — Rendezvous** (complete: opt-in per-group design resolved with Baim since the original doc was architecture-only — see "Phase 45 design (resolved)" below: 45.1 own-IP-change detection as `1.18.6`, 45.2 `RendezvousCache`+wire messages as `1.18.7`, 45.3 `ui.py` wiring as `1.18.8`)
-2. Phase 46 — NAT Traversal & Relay (optional; design resolved with
-   Baim — see "Phase 46 design (resolved)" above; 46.1 (`1.19.0`), 46.2 (`1.19.1`),
-   and 46.3 (`1.19.2`) done; 46.4 (`/group relay on|off` toggle) next) ← next
-3. Phase 36/37 — UI/security UX
+1. **Phase 45 — Rendezvous** (complete: 45.1 `1.18.6`, 45.2 `1.18.7`,
+   45.3 `1.18.8`)
+2. **Phase 46 — NAT Traversal & Relay** (complete: 46.1 `1.19.0`,
+   46.2 `1.19.1`, 46.3 `1.19.2`, 46.4 `1.19.3`)
+3. **Phase 36/37 — UI/security UX** (in progress: 36.1 `1.20.0` complete; next: 36.2 `1.20.1` trust decision controls) <- next
 4. Phase 28-35 — logging, performance, concurrency, state machines,
-   error protocol
-5. Phase 38 — Project structure final (**not done now, deliberately** —
-   see note below)
+   error protocol (design resolved in `RELIABILITY_DESIGN.md`; starts after
+   Phase 36/37 with logging and reliability taxonomy)
+5. Phase 38 — Project structure final (design resolved in
+   `PROJECT_STRUCTURE_DESIGN.md`; deferred until Phase 36/37 and 28-35
+   stabilize)
 6. Security audit, release
 
-## Why Phase 38 (final project structure) isn't done yet
+## Why Phase 38 Is Deferred
 
-`IMPLEMENTATION_PLAN.md`'s Phase 38 target structure (`app/`,
-`core/transport/`, `core/crypto/`, etc.) is now much closer than it was
-— `core/transport/secure.py` and `core/crypto/handshake.py` both exist
-today (Phase 6-9 landed). What's still missing from the newer Phase 40-46
-scope is `core/connectivity/` (Phase 44-46, design-complete). What's
-already done matches Phase 38 exactly and needs no rework later:
-`core/{protocol,identity,trust,crypto,transport,transfer,vault,security,group}`
-are all in their final destinations; `tests/` was split out; CI
-(`.github/workflows/tests.yml`) runs the full suite on every push.
+Most core packages, including Phase 44-46's `core/connectivity/`, are already
+in their final locations. Phase 38 remains deferred because moving the
+remaining root implementations (`peer.py`, `discovery.py`, `chat.py`,
+`file_transfer.py`, and `ui.py`) changes imports and packaging across the
+application. It should occur only after the Trust Center and reliability work
+stabilize the workflows it must preserve. The precise target layout, shim
+contract, migration order, clean-wheel verification, and acceptance criteria
+are in `PROJECT_STRUCTURE_DESIGN.md`.
 

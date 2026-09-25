@@ -5,6 +5,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.20.0] — Phase 36.1: Read-only device inventory
+
+### Added
+- **Trust Center UI (`TrustCenterModal`)**:
+  - Read-only device inventory listing all known devices from `TrustStore.list_all()`.
+  - Filter toggle tabs: All, ⏳ Pending, ✓ Trusted, and ✗ Revoked.
+  - Informative row labels showing status icon, device name, truncated device ID, status name, and relative last seen time.
+  - Safe empty states for all filters and a vault-locked state if opened without an unlocked vault session.
+- **Device Detail View (`TrustDeviceDetailModal`)**:
+  - Full inspect view for any device showing full device ID, formatted public-key fingerprint (`format_fingerprint`), first/last seen relative timestamps, and revocation metadata (revoked by, reason) if revoked.
+  - "Copy Fingerprint" action button copying the formatted fingerprint to the clipboard.
+- **Commands**:
+  - `/devices [pending]`: Opens the Trust Center dialog (defaulting to all, or filtering to pending only).
+  - `/pairs`: Direct alias for `/devices`.
+  - `/trust <device_id>`: Opens the device detail modal by exact device ID or prefix match.
+- **Auditing & Notification**:
+  - `_on_trust_required` now points users to `/devices pending` when a new device connects for the first time.
+- **Test Coverage**:
+  - `tests/test_trust_center_36_1.py`: 8 focused tests covering empty list, multi-status inventory, filter switching, vault-locked safeguards, unknown device lookup, prefix resolution, clipboard copy, and command alias handling.
+
+## [1.19.3] — Phase 46.4: relay-mode toggle
+
+### Added
+- **`ui.py`**: `/group relay <group_id> on|off` enables or disables this device as a relay host for an active group. The setting is in-memory only, requires active membership to enable, and remains independent from Rendezvous mode.
+- Four focused tests cover unknown groups, non-members, on/off behavior, invalid input, and Rendezvous independence.
+
+### Changed
+- **Relay candidate discovery** is explicitly broadcast-based: A sends `relay_candidate_query` to already-connected peers and collects live `relay_candidate_response` messages. It does not reuse `rendezvous_lookup`, so Relay hosting does not depend on any group member enabling Rendezvous.
+
+**Phase 46 is now complete**: 46.1 (`1.19.0`), 46.2 (`1.19.1`), 46.3 (`1.19.2`), and 46.4 (`1.19.3`).
+
 ## [1.19.2] — Phase 46.3: A-side direct-then-relay orchestration
 
 ### Added
@@ -26,9 +57,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     3. Sequential trial: queries candidates with `relay_request` with `RELAY_RESPONSE_TIMEOUT` (3s) and opens a tunnel via `connect_via_relay_tunnel()` on accept.
 - 21 new tests across `tests/test_relay_pipe.py` (passive Bob e2e handshake and message passing), `tests/test_relay_authorization.py` (candidate query authorization and message validation), and `tests/test_relay_ui.py` (candidate queries, response queue feeding, direct and relay fallback connect orchestration) — total 40 relay tests passing.
 
-### Not yet done (46.4)
-- No `/group relay <id> on|off` command — `_relay_active_groups` is toggled programmatically until 46.4 adds the CLI command.
-
 ## [1.19.1] — Phase 46.2: relay_request wire protocol + R-side authorization
 
 ### Added
@@ -45,7 +73,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [1.19.0] — Phase 46.1: relay-tunnel primitive
 
 ### Added
-- **Phase 46 design resolved with Baim** before any code — `INTERNET_CONNECTIVITY_DESIGN.md` §11 "Optional Relay" was 6 lines, architecture-only. Landed: no active hole-punching (try direct via `ConnectionManager.connect_to` with a short timeout, fall straight back to relay), relay authorization opt-in per-group via a separate toggle from Rendezvous (`/group relay <id> on|off`, Phase 46.4), relay-candidate discovery reusing `rendezvous_lookup` with sequential trial across candidates, and a pure-byte relay protocol where B is passive and the pipe at R lives exactly as long as both its legs do. Full writeup: `docs/ROADMAP.md`'s new "Phase 46 design (resolved)" section.
+- **Phase 46 design resolved with Baim** before any code — `INTERNET_CONNECTIVITY_DESIGN.md` §11 "Optional Relay" was 6 lines, architecture-only. Landed: no active hole-punching (try direct via `ConnectionManager.connect_to` with a short timeout, fall straight back to relay), relay authorization opt-in per-group via a separate toggle from Rendezvous (`/group relay <id> on|off`, Phase 46.4), live relay-candidate discovery by broadcast to connected peers, and a pure-byte relay protocol where B is passive and the pipe at R lives exactly as long as both its legs do. Full writeup: `docs/ROADMAP.md`'s new "Phase 46 design (resolved)" section.
 - **`core/transport/secure.py`**: a third inner payload marker, `TYPE_RELAY` (`b"R"`), alongside the existing `TYPE_JSON`/`TYPE_BINARY` — `EncryptedTransport.send_relay()`/`receive_frame()`'s `"relay"` kind. Kept fully separate from `TYPE_BINARY` (file_data) so a relayed chunk can never collide with `decode_file_data`'s fixed-header framing; zero base64 tax, since it rides the same raw-bytes wire path file_data already uses.
 - **`core/transport/session.py`**: `SecureSession.send_relay()`, mirroring `send_binary()`.
 - **`core/transport/relay_stream.py`** [NEW]: `RelayedStreamReader`/`RelayedStreamWriter` — a duck-typed `asyncio.StreamReader`/`StreamWriter` pair (just the `readexactly()` / `write()`+`drain()`+`get_extra_info()`+`is_closing()`+`close()`+`wait_closed()` surface `core/protocol/frame.py`, `core/transport/tcp.py`, and `core/crypto/handshake.py` actually use) backed by `relay` chunks instead of a real socket. Wrapped in a plain `TCPConnection`, this lets `perform_handshake_initiator`/`_responder` and `SecureSession`/`EncryptedTransport` run completely unmodified over a relayed connection — see the new tests for a full Phase 6 handshake proving it end-to-end.
