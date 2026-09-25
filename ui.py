@@ -71,12 +71,14 @@ import protocol
 from core.trust.store import DEFAULT_DB_PATH as TRUST_DB_LEGACY_PATH
 from core.trust.store import TrustStore
 from core.trust.device import TrustedDevice, TrustStatus
+from core.trust.revocation import revoke_device, RevocationError
 from core.identity.fingerprint import format_fingerprint, short_fingerprint
 from core.group import (
     AdminStatus,
     DEFAULT_CAPABILITY_TTL,
     ExportCapability,
     ExportRequest,
+    ExternalTrustDeniedError,
     Group,
     GroupPolicy,
     GroupStore,
@@ -453,13 +455,76 @@ class TrustCenterModal(ModalScreen[None]):
         self.app.push_screen(TrustDeviceDetailModal(dev))
 
 
+class TrustConfirmModal(ModalScreen["Optional[str]"]):
+    """Phase 36.2: Confirmation gate before a trust decision writes to the
+    store. Dismisses with a reason string (empty string OK — 'no reason
+    given') on confirm, or None on cancel.
+
+    action:
+      - "trust"  — approve a PENDING device; no reason field, just a
+        restated name/fingerprint to confirm against.
+      - "revoke" / "reject" — same underlying local-revoke action
+        (revoke_device()), different verb depending on the device's
+        current state; shows an optional free-text reason Input,
+        pre-filled empty per the design doc.
+    """
+
+    def __init__(self, device: TrustedDevice, action: str, initial_reason: str = "") -> None:
+        super().__init__()
+        self._device = device
+        self._action = action
+        self._initial_reason = initial_reason
+
+    def compose(self) -> ComposeResult:
+        dev = self._device
+        with Vertical(id="trust-confirm-dialog"):
+            if self._action == "trust":
+                yield Label("[bold]Trust this device?[/bold]")
+                yield Label(f"Name: {dev.name}")
+                yield Label(f"Fingerprint: {format_fingerprint(dev.device_id)}")
+                with Horizontal(id="trust-confirm-actions"):
+                    yield Button("Trust", id="tcm-confirm", variant="success")
+                    yield Button("Cancel", id="tcm-cancel")
+            else:
+                verb = "Revoke" if self._action == "revoke" else "Reject"
+                yield Label(f"[bold]{verb} this device?[/bold]")
+                yield Label(
+                    "This change is local. Future handshakes from this "
+                    "device will be rejected."
+                )
+                yield Label("Reason (optional):")
+                yield Input(value=self._initial_reason, placeholder="reason", id="tcm-reason")
+                with Horizontal(id="trust-confirm-actions"):
+                    yield Button("Confirm", id="tcm-confirm", variant="error")
+                    yield Button("Cancel", id="tcm-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "tcm-cancel":
+            self.dismiss(None)
+        elif event.button.id == "tcm-confirm":
+            if self._action == "trust":
+                self.dismiss("")
+            else:
+                reason = self.query_one("#tcm-reason", Input).value.strip()
+                self.dismiss(reason)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if self._action != "trust":
+            self.dismiss(event.value.strip())
+
+
 class TrustDeviceDetailModal(ModalScreen[None]):
-    """Phase 36.1: Detail view for a single trusted/pending/revoked device.
-    Read-only — shows full device_id, public-key fingerprint (derived from
+    """Phase 36.1/36.2: Detail view for a single trusted/pending/revoked
+    device. Shows full device_id, public-key fingerprint (derived from
     device_id as SHA256 of pubkey), first/last seen, status, and revocation
-    metadata.  A 'Copy Fingerprint' control lets the user copy it for an
-    out-of-band comparison.  Action buttons (Trust/Reject/Revoke) are added
-    in Phase 36.2 (1.20.1).
+    metadata. A 'Copy Fingerprint' control lets the user copy it for an
+    out-of-band comparison.
+
+    Phase 36.2 adds the decision controls themselves: a PENDING device
+    gets Trust/Reject buttons, a TRUSTED device gets Revoke, and a
+    REVOKED device stays view-only (Close). Each action opens
+    TrustConfirmModal before writing to the store, then refreshes this
+    view in place against the updated record.
     """
 
     def __init__(self, device: TrustedDevice) -> None:
@@ -467,9 +532,12 @@ class TrustDeviceDetailModal(ModalScreen[None]):
         self._device = device
 
     def compose(self) -> ComposeResult:
+        with Vertical(id="trust-detail-dialog"):
+            yield from self._render_body()
+
+    def _render_body(self) -> ComposeResult:
         dev = self._device
         full_fp = format_fingerprint(dev.device_id)
-        short_fp = short_fingerprint(dev.device_id)
 
         if dev.status == TrustStatus.PENDING:
             status_label = "[yellow]⏳ PENDING[/yellow] — awaiting your approval"
@@ -478,32 +546,75 @@ class TrustDeviceDetailModal(ModalScreen[None]):
         else:
             status_label = "[red]✗ REVOKED[/red] — future handshakes rejected"
 
-        with Vertical(id="trust-detail-dialog"):
-            yield Label(f"[bold]Device: {dev.name}[/bold]")
-            yield Label(f"Status: {status_label}")
-            yield Label(f"Device ID:  [dim]{dev.device_id}[/dim]")
-            yield Label("Fingerprint (for out-of-band comparison):")
-            yield Label(full_fp, id="trust-detail-fingerprint")
+        yield Label(f"[bold]Device: {dev.name}[/bold]")
+        yield Label(f"Status: {status_label}")
+        yield Label(f"Device ID:  [dim]{dev.device_id}[/dim]")
+        yield Label("Fingerprint (for out-of-band comparison):")
+        yield Label(full_fp, id="trust-detail-fingerprint")
+        yield Label(
+            f"First seen: {_format_relative_time(dev.first_seen)}  "
+            f"| Last seen: {_format_relative_time(dev.last_seen)}"
+        )
+        if dev.status == TrustStatus.REVOKED and dev.revoked_by:
             yield Label(
-                f"First seen: {_format_relative_time(dev.first_seen)}  "
-                f"| Last seen: {_format_relative_time(dev.last_seen)}"
+                f"Revoked by: {dev.revoked_by}"
+                + (f"  Reason: {dev.revoke_reason}" if dev.revoke_reason else "")
             )
-            if dev.status == TrustStatus.REVOKED and dev.revoked_by:
-                yield Label(
-                    f"Revoked by: {dev.revoked_by}"
-                    + (f"  Reason: {dev.revoke_reason}" if dev.revoke_reason else "")
-                )
-            with Horizontal(id="trust-detail-actions"):
-                yield Button("Copy Fingerprint", id="td-copy-fp")
-                yield Button("Close", id="td-close")
+        with Horizontal(id="trust-detail-actions"):
+            yield Button("Copy Fingerprint", id="td-copy-fp")
+            if dev.status == TrustStatus.PENDING:
+                yield Button("Trust", id="td-trust", variant="success")
+                yield Button("Reject", id="td-reject", variant="error")
+            elif dev.status == TrustStatus.TRUSTED:
+                yield Button("Revoke", id="td-revoke", variant="error")
+            yield Button("Close", id="td-close")
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "td-close":
+    async def _refresh(self, app: "ChatApp") -> None:
+        """Re-fetch the device from the store and re-render this view in
+        place. If the vault locked mid-flow or the device somehow
+        vanished, just close rather than show a stale/broken view."""
+        if app.trust_store is None:
             self.dismiss()
-        elif event.button.id == "td-copy-fp":
+            return
+        updated = app.trust_store.get(self._device.device_id)
+        if updated is None:
+            self.dismiss()
+            return
+        self._device = updated
+        container = self.query_one("#trust-detail-dialog", Vertical)
+        await container.remove_children()
+        await container.mount_all(list(self._render_body()))
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn = event.button.id
+        if btn == "td-close":
+            self.dismiss()
+            return
+        if btn == "td-copy-fp":
             full_fp = format_fingerprint(self._device.device_id)
             self.app.copy_to_clipboard(full_fp)
             self.notify("Fingerprint copied to clipboard.", title="Copied")
+            return
+
+        app: ChatApp = self.app  # type: ignore[assignment]
+        if btn == "td-trust":
+            result = await app.push_screen_wait(TrustConfirmModal(self._device, "trust"))
+            if result is None:
+                return
+            await app._do_trust_approve(self._device.device_id)
+            await self._refresh(app)
+        elif btn == "td-reject":
+            result = await app.push_screen_wait(TrustConfirmModal(self._device, "reject"))
+            if result is None:
+                return
+            await app._do_trust_revoke(self._device.device_id, result or None)
+            await self._refresh(app)
+        elif btn == "td-revoke":
+            result = await app.push_screen_wait(TrustConfirmModal(self._device, "revoke"))
+            if result is None:
+                return
+            await app._do_trust_revoke(self._device.device_id, result or None)
+            await self._refresh(app)
 
 
 class NameSetupModal(ModalScreen[str]):
@@ -963,6 +1074,17 @@ class ChatApp(App):
         text-style: bold;
     }
     #trust-detail-actions Button { margin-right: 1; margin-top: 1; }
+    #trust-confirm-dialog {
+        align: center middle;
+        background: $panel;
+        border: thick $accent;
+        padding: 1 2;
+        width: 64;
+        height: auto;
+    }
+    #trust-confirm-dialog Label { margin-top: 1; }
+    #trust-confirm-dialog Input { margin-top: 1; margin-bottom: 1; }
+    #trust-confirm-actions Button { margin-right: 1; margin-top: 1; }
     Screen > .screen--selection {
         background: $primary;
         color: $text;
@@ -3733,6 +3855,7 @@ class ChatApp(App):
             self._log(" [bold cyan]/devices [pending][/bold cyan]    Open Trust Center (all or pending-only filter)")
             self._log(" [bold cyan]/pairs[/bold cyan]                Alias for /devices")
             self._log(" [bold cyan]/trust \u003cdevice_id\u003e[/bold cyan]      Open device detail view")
+            self._log(" [bold cyan]/revoke <device_id> [reason][/bold cyan]   Locally revoke a device")
             self._log(" [bold cyan]/lock[/bold cyan]                 Lock vault now (Ctrl+L); re-prompt for passphrase")
             self._log(" [bold cyan]/autolock [minutes][/bold cyan]  Show/set idle auto-lock (default 5; 0 = off)")
             self._log(" [bold cyan]/criticalkey [action][/bold cyan] Manage optional Export extra key")
@@ -4010,6 +4133,9 @@ class ChatApp(App):
         elif cmd == "/trust":
             await self._cmd_trust_detail(arg)
 
+        elif cmd == "/revoke":
+            await self._cmd_revoke(arg)
+
         elif cmd in ("/groups", "/group"):
             await self._handle_group_command(arg)
 
@@ -4064,6 +4190,84 @@ class ChatApp(App):
             target = matches[0]
 
         self.push_screen(TrustDeviceDetailModal(target))
+
+    # -----------------------------------------------------------------------
+    # Phase 36.2: Trust decision controls
+    # -----------------------------------------------------------------------
+
+    async def _do_trust_approve(self, device_id: str) -> None:
+        """Phase 36.2: Approve a device (PENDING -> TRUSTED)."""
+        if self.trust_store is None:
+            self._log("[red]Vault is locked — unlock vault first with /unlock.[/red]")
+            return
+
+        # Check group policy restriction if policy enforcer is active
+        enforcer = self.policy_enforcer or (PolicyEnforcer(self.group_store) if self.group_store else None)
+        if enforcer is not None:
+            try:
+                enforcer.check_external_trust(device_id)
+            except ExternalTrustDeniedError as exc:
+                self._log(f"[red]Trust denied by group policy: {exc}[/red]")
+                return
+
+        try:
+            self.trust_store.approve(device_id)
+            self._log(f"[green]Device {device_id[:8]} approved and marked TRUSTED.[/green]")
+        except ValueError as exc:
+            self._log(f"[yellow]Could not approve device {device_id[:8]}: {exc}[/yellow]")
+
+    async def _do_trust_revoke(self, device_id: str, reason: Optional[str] = None) -> None:
+        """Phase 36.2: Locally revoke a device (TRUSTED/PENDING -> REVOKED)."""
+        if self.trust_store is None:
+            self._log("[red]Vault is locked — unlock vault first with /unlock.[/red]")
+            return
+
+        revoked_by = self.display_name or "local user"
+        try:
+            revoke_device(self.trust_store, device_id, revoked_by=revoked_by, reason=reason)
+            reason_info = f" (reason: '{reason}')" if reason else ""
+            self._log(f"[red]Device {device_id[:8]} locally REVOKED{reason_info}. Future handshakes will be rejected.[/red]")
+        except (RevocationError, ValueError) as exc:
+            self._log(f"[yellow]Could not revoke device {device_id[:8]}: {exc}[/yellow]")
+
+    async def _cmd_revoke(self, arg: str) -> None:
+        """/revoke <device_id> [reason...]"""
+        if self.trust_store is None:
+            self._log("[red]Vault is locked — unlock vault first with /unlock.[/red]")
+            return
+
+        tokens = arg.strip().split(maxsplit=1)
+        if not tokens or not tokens[0]:
+            self._log("[yellow]Usage: /revoke <device_id> [reason][/yellow]")
+            return
+
+        prefix = tokens[0]
+        initial_reason = tokens[1] if len(tokens) > 1 else ""
+
+        all_devices = self.trust_store.list_all()
+        matches = [d for d in all_devices if d.device_id.lower().startswith(prefix.lower())]
+        if not matches:
+            self._log(f"[red]Device '{prefix}' not found in trust store.[/red]")
+            return
+        if len(matches) > 1:
+            exact = [d for d in matches if d.device_id.lower() == prefix.lower()]
+            if len(exact) == 1:
+                target = exact[0]
+            else:
+                self._log(f"[yellow]Ambiguous device prefix '{prefix}' ({len(matches)} matches). Specify more characters.[/yellow]")
+                return
+        else:
+            target = matches[0]
+
+        action = "revoke" if target.status == TrustStatus.TRUSTED else "reject"
+        result = await self.push_screen_wait(
+            TrustConfirmModal(target, action, initial_reason=initial_reason)
+        )
+        if result is None:
+            self._log("[dim]Revocation cancelled.[/dim]")
+            return
+
+        await self._do_trust_revoke(target.device_id, reason=result or None)
 
 
 def main() -> None:

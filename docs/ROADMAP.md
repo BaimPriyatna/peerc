@@ -134,6 +134,7 @@ endpoint_update.py` for the shape to copy.
 | `1.19.2` | 46.3 | Phase 46.3: A-side direct-then-relay orchestration — `make_relay_candidate_query`/`make_relay_candidate_response` wire messages, `authorize_relay_candidate_query()`, `initiate_secure_session_on_connection()` refactor, `ConnectionManager.connect_via_relay_tunnel()`, incoming passive relay accept at B, and `ui.py`'s `_try_relay_connect()` orchestration with candidate broadcast, collection window, sequential query, and tunnel handshake |
 | `1.19.3` | 46.4 | Phase 46.4: `/group relay <id> on|off` enables or disables in-memory relay hosting for an active group, independently of Rendezvous. Completes Phase 46 |
 | `1.20.0` | 36.1 | Phase 36.1: Trust Center read-only device inventory (`/devices [pending]`, `/pairs`, `/trust <id>`, `TrustCenterModal`, `TrustDeviceDetailModal`; status filters, safe empty and vault-locked states, fingerprint clipboard copy) |
+| `1.20.1` | 36.2 | Phase 36.2: Trust decisions: approve/revoke actions in `TrustDeviceDetailModal` + `TrustConfirmModal` + `/revoke <id> [reason]`; group policy denial handling and idempotence guards |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -315,7 +316,7 @@ numeric phase order in the plan doc:
    45.3 `1.18.8`)
 2. **Phase 46 — NAT Traversal & Relay** (complete: 46.1 `1.19.0`,
    46.2 `1.19.1`, 46.3 `1.19.2`, 46.4 `1.19.3`)
-3. **Phase 36/37 — UI/security UX** (in progress: 36.1 `1.20.0` complete; next: 36.2 `1.20.1` trust decision controls) <- next
+3. **Phase 36/37 — UI/security UX** (in progress: 36.1 `1.20.0` & 36.2 `1.20.1` complete; next: 37.1 `1.20.2` event-driven pending prompt) <- next
 4. Phase 28-35 — logging, performance, concurrency, state machines,
    error protocol (design resolved in `RELIABILITY_DESIGN.md`; starts after
    Phase 36/37 with logging and reliability taxonomy)

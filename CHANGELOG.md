@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.20.1] — Phase 36.2: Trust decision controls
+
+### Added
+- **Interactive Trust Decisions (`TrustDeviceDetailModal`)**:
+  - Contextual action buttons based on device status: `Trust` (variant `success`) and `Reject` (variant `error`) for `PENDING` devices; `Revoke` (variant `error`) for `TRUSTED` devices; view-only `Close` for `REVOKED` devices.
+  - In-place view refresh (`_refresh()`) re-rendering the device state upon decision confirmation.
+- **Confirmation Gate (`TrustConfirmModal`)**:
+  - Pre-write modal preventing accidental changes. Displays device name and formatted fingerprint for `trust`, and an explanation with optional reason input for `revoke` / `reject`.
+- **Backend Handlers & Policy Enforcer**:
+  - `_do_trust_approve(device_id)`: Enforces group policy restrictions via `PolicyEnforcer.check_external_trust()` (denials surface descriptive error without state changes) and marks device `TRUSTED` via `TrustStore.approve()`.
+  - `_do_trust_revoke(device_id, reason)`: Locally revokes devices via `revoke_device()` with user attribution and optional reason.
+  - Idempotence guards preventing crashes on duplicate or disallowed actions (e.g. attempting to approve a revoked device).
+- **Command**:
+  - `/revoke <device_id> [reason]`: Direct command to revoke or reject a device by prefix or exact ID with interactive confirmation modal and optional pre-filled reason.
+- **Test Coverage**:
+  - `tests/test_trust_center_36_2.py`: 8 focused tests covering pending approval, refusal to approve revoked devices, trusted revocation, pending rejection, group policy denial, command dispatch/cancellation, idempotence, and dynamic button layout.
+
 ## [1.20.0] — Phase 36.1: Read-only device inventory
 
 ### Added
