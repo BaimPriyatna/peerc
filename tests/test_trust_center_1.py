@@ -1,4 +1,4 @@
-"""tests/test_trust_center_36_1.py — Phase 36.1: Read-only Trust Center inventory.
+"""tests/test_trust_center_1.py — Phase 36.1: Read-only Trust Center inventory.
 
 Tests covering:
 - Empty device list state

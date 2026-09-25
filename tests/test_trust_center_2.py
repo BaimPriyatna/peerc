@@ -1,4 +1,4 @@
-"""tests/test_trust_center_36_2.py — Phase 36.2: Trust decision controls.
+"""tests/test_trust_center_2.py — Phase 36.2: Trust decision controls.
 
 Tests covering:
 - Approve pending device (PENDING -> TRUSTED)

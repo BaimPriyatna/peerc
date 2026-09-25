@@ -219,26 +219,32 @@ def test_delete_nonexistent_file_raises_error(tmp_path):
 
 def test_list_secure_files_sorted_by_timestamp(tmp_path):
     """list_secure_files must return files sorted by encrypted_at descending."""
+    from core.vault.secure_file import _save_metadata
+
     plaintext1 = tmp_path / "file1.txt"
     plaintext1.write_text("First")
     plaintext2 = tmp_path / "file2.txt"
     plaintext2.write_text("Second")
     plaintext3 = tmp_path / "file3.txt"
     plaintext3.write_text("Third")
-    
+
     secure_dir = tmp_path / "secure"
     dek = new_dek()
-    
-    import time
-    
+
     meta1 = encrypt_file(str(plaintext1), str(secure_dir), dek)
-    time.sleep(0.01)
     meta2 = encrypt_file(str(plaintext2), str(secure_dir), dek)
-    time.sleep(0.01)
     meta3 = encrypt_file(str(plaintext3), str(secure_dir), dek)
-    
+
+    # Pin distinct timestamps — do not rely on wall-clock resolution
+    meta1.encrypted_at = 100.0
+    meta2.encrypted_at = 200.0
+    meta3.encrypted_at = 300.0
+    _save_metadata(str(secure_dir), meta1)
+    _save_metadata(str(secure_dir), meta2)
+    _save_metadata(str(secure_dir), meta3)
+
     files = list_secure_files(str(secure_dir))
-    
+
     assert len(files) == 3
     # Most recent first
     assert files[0].secure_id == meta3.secure_id

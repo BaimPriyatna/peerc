@@ -617,6 +617,80 @@ class TrustDeviceDetailModal(ModalScreen[None]):
             await self._refresh(app)
 
 
+class TrustPromptModal(ModalScreen[None]):
+    """Phase 37.1: Event-driven pending prompt for unverified devices.
+
+    Displays device name, short peer ID, abbreviated fingerprint,
+    full fingerprint reveal/copy controls, and observed connection route
+    (untrusted reachability info). Provides Trust, Reject, and Later actions.
+    """
+
+    def __init__(self, evt: TrustRequired) -> None:
+        super().__init__()
+        self.evt = evt
+        self._revealed = False
+
+    def compose(self) -> ComposeResult:
+        peer_id = self.evt.peer_id
+        short_id = peer_id[:8] if peer_id else "unknown"
+        try:
+            short_fp = short_fingerprint(peer_id) if peer_id else ""
+            full_fp = format_fingerprint(peer_id) if peer_id else ""
+        except Exception:
+            short_fp = peer_id[:16] if peer_id else ""
+            full_fp = peer_id
+        route = self.evt.addr_key if self.evt.addr_key else "unknown"
+
+        with Vertical(id="trust-prompt-dialog"):
+            yield Label("[bold]Trust Required: New Device Seen[/bold]", id="tpm-title")
+            yield Label(f"Device Name: [bold]{self.evt.peer_name}[/bold]", id="tpm-name")
+            yield Label(f"Device ID: [dim]{short_id}[/dim]", id="tpm-id")
+            yield Label(f"Fingerprint: {short_fp}", id="tpm-short-fp")
+            yield Label(full_fp, id="tpm-full-fp")
+            with Horizontal(id="tpm-fp-actions"):
+                yield Button("Reveal Full Fingerprint", id="tpm-reveal-fp")
+                yield Button("Copy Fingerprint", id="tpm-copy-fp")
+            yield Label(
+                f"Observed connection route: {route}\n"
+                "[dim italic](untrusted reachability info, not for identity verification)[/dim italic]",
+                id="tpm-route",
+            )
+            with Horizontal(id="trust-prompt-actions"):
+                yield Button("Trust", id="tpm-trust", classes="trust", variant="success")
+                yield Button("Reject", id="tpm-reject", classes="reject", variant="error")
+                yield Button("Later", id="tpm-later", classes="later")
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn = event.button.id
+        if btn == "tpm-copy-fp":
+            try:
+                full_fp = format_fingerprint(self.evt.peer_id)
+            except Exception:
+                full_fp = self.evt.peer_id
+            if hasattr(self.app, "copy_to_clipboard"):
+                self.app.copy_to_clipboard(full_fp)
+            self.notify("Fingerprint copied to clipboard.", title="Copied")
+            return
+        if btn == "tpm-reveal-fp":
+            self._revealed = not self._revealed
+            fp_label = self.query_one("#tpm-full-fp", Label)
+            fp_label.styles.display = "block" if self._revealed else "none"
+            event.button.label = "Hide Full Fingerprint" if self._revealed else "Reveal Full Fingerprint"
+            return
+
+        app = self.app
+        if btn in ("tpm-trust", "trust"):
+            if hasattr(app, "_do_trust_approve"):
+                await app._do_trust_approve(self.evt.peer_id)
+            self.dismiss()
+        elif btn in ("tpm-reject", "reject"):
+            if hasattr(app, "_do_trust_revoke"):
+                await app._do_trust_revoke(self.evt.peer_id, reason=None)
+            self.dismiss()
+        elif btn in ("tpm-later", "later"):
+            self.dismiss()
+
+
 class NameSetupModal(ModalScreen[str]):
     """First-run only: pick a display name before the app proceeds.
 
@@ -853,10 +927,10 @@ class FileOfferModal(ModalScreen[bool]):
         super().__init__()
         self.sender_name = sender_name
         self.filename = filename
-        self.size = size
+        self.file_size = size
 
     def compose(self) -> ComposeResult:
-        size_kb = self.size / 1024
+        size_kb = self.file_size / 1024
         with Vertical(id="offer-dialog"):
             yield Label(f"{self.sender_name} wants to send you a file:")
             yield Label(f"  {self.filename}  ({size_kb:.1f} KB)")
@@ -1085,6 +1159,18 @@ class ChatApp(App):
     #trust-confirm-dialog Label { margin-top: 1; }
     #trust-confirm-dialog Input { margin-top: 1; margin-bottom: 1; }
     #trust-confirm-actions Button { margin-right: 1; margin-top: 1; }
+    #trust-prompt-dialog {
+        align: center middle;
+        background: $panel;
+        border: thick $accent;
+        padding: 1 2;
+        width: 66;
+        height: auto;
+    }
+    #trust-prompt-dialog Label { margin-top: 1; }
+    #tpm-full-fp { display: none; margin-top: 1; }
+    #tpm-fp-actions Button { margin-right: 1; margin-top: 1; }
+    #trust-prompt-actions Button { margin-right: 1; margin-top: 1; }
     Screen > .screen--selection {
         background: $primary;
         color: $text;
@@ -1161,6 +1247,11 @@ class ChatApp(App):
         # Phase 43: Group-Gated Export Authorization
         self.policy_enforcer: Optional[PolicyEnforcer] = None
         self._pending_export_requests: dict[str, tuple[str, ExportRequest]] = {}
+
+        # Phase 37.1: Event-driven pending prompt
+        self._trust_prompt_queue: list[TrustRequired] = []
+        self._trust_prompt_open: bool = False
+        self._current_trust_prompt: Optional[TrustRequired] = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -2845,10 +2936,28 @@ class ChatApp(App):
         except Exception as e:
             self._log(f"[red]Failed to store received export capability: {e}[/red]")
 
+    def pop_screen(self):
+        screen = getattr(self, "screen", None)
+        ret = super().pop_screen()
+        if isinstance(screen, TrustPromptModal):
+            self._on_prompt_dismissed()
+        elif isinstance(screen, (FileOfferModal, VaultUnlockModal, VaultCreateModal, VaultRecoveryCodeModal, CriticalActionKeyModal)):
+            self.call_after_refresh(self._dequeue_next_trust_prompt)
+        return ret
 
     def _perform_hard_lock(self) -> None:
         """Detach dependents, wipe DEK, flush+destroy the working copy.
         Does not show the unlock modal — caller handles that."""
+        self._trust_prompt_queue.clear()
+        if hasattr(self, "screen") and isinstance(self.screen, TrustPromptModal):
+            self.pop_screen()
+        elif hasattr(self, "screen_stack"):
+            for s in list(self.screen_stack):
+                if isinstance(s, TrustPromptModal):
+                    s.dismiss()
+        self._trust_prompt_open = False
+        self._current_trust_prompt = None
+
         if self.vault_persistence is not None:
             self.vault_persistence.reattach(None)
         if self.trust_store is not None:
@@ -2861,6 +2970,14 @@ class ChatApp(App):
         if self.vault_session is not None and self.vault_session.is_unlocked:
             self.vault_session.lock()
         self.vault_db = None
+
+    def _do_vault_lock(self) -> None:
+        """Phase 37.1: Vault lock entrypoint."""
+        self._perform_hard_lock()
+
+    def _hard_lock(self) -> None:
+        """Phase 37.1: Alias for _perform_hard_lock."""
+        self._perform_hard_lock()
 
     @work
     async def action_lock_vault(self) -> None:
@@ -3703,15 +3820,90 @@ class ChatApp(App):
         color = "red" if evt.severity in ("HIGH", "CRITICAL") else "yellow"
         self._log(f"[{color}][bold]SECURITY {evt.severity}:[/bold] {evt.event_type}{peer_info}[/{color}]")
 
+    def _has_blocking_modal(self) -> bool:
+        """Check if any blocking modal is currently on the screen stack."""
+        if getattr(self, "_relocking", False):
+            return True
+        screens = getattr(self, "screen_stack", [])
+        for s in screens:
+            if isinstance(s, (FileOfferModal, VaultUnlockModal, VaultCreateModal, VaultRecoveryCodeModal, CriticalActionKeyModal)):
+                return True
+        return False
+
     def _on_trust_required(self, evt: TrustRequired) -> None:
-        # Retain the log entry as an audit-friendly signal (Phase 37.1 adds
-        # the queued TrustPromptModal on top of this; for 1.20.0 the log is
-        # the only notification, same as before, but now points at /devices).
+        # Retain the log entry as an audit-friendly signal (Phase 37.1)
         self._log(
             f"[yellow]New device seen for the first time: [bold]{evt.peer_name}[/bold] "
             f"({evt.peer_id[:8]}) — not yet trusted. "
             f"Use [bold]/devices pending[/bold] to review.[/yellow]"
         )
+
+        combo = (evt.peer_id, evt.public_key)
+        # Dedup: skip if (peer_id, public_key) is already queued
+        if any((item.peer_id, item.public_key) == combo for item in self._trust_prompt_queue):
+            return
+        # Dedup: skip if prompt is currently open for this combo
+        if self._trust_prompt_open and self._current_trust_prompt is not None:
+            if (self._current_trust_prompt.peer_id, self._current_trust_prompt.public_key) == combo:
+                return
+
+        # Skip if another modal is blocking (file offer, vault unlock) — queue only
+        if self._has_blocking_modal() or self._trust_prompt_open:
+            self._trust_prompt_queue.append(evt)
+            return
+
+        # Not open and not blocked: open prompt immediately
+        self._trust_prompt_open = True
+        self._current_trust_prompt = evt
+        try:
+            from textual._context import active_message_pump
+            token = active_message_pump.set(self)
+        except Exception:
+            token = None
+        try:
+            self.push_screen(TrustPromptModal(evt), callback=self._on_prompt_dismissed)
+        finally:
+            if token is not None:
+                active_message_pump.reset(token)
+
+    def _on_prompt_dismissed(self, result: Optional[object] = None) -> None:
+        """Called when TrustPromptModal is dismissed."""
+        if not self._trust_prompt_open and self._current_trust_prompt is None:
+            return
+        self._trust_prompt_open = False
+        self._current_trust_prompt = None
+        self._dequeue_next_trust_prompt()
+
+    def _dequeue_next_trust_prompt(self) -> None:
+        """Process next pending trust prompt from queue."""
+        if self._trust_prompt_open:
+            return
+        if self._has_blocking_modal():
+            return
+        if self.vault_session is not None and not self.vault_session.is_unlocked:
+            return
+
+        while self._trust_prompt_queue:
+            next_evt = self._trust_prompt_queue.pop(0)
+            combo = (next_evt.peer_id, next_evt.public_key)
+            # Remove any pending duplicates for the same combo
+            self._trust_prompt_queue = [
+                item for item in self._trust_prompt_queue
+                if (item.peer_id, item.public_key) != combo
+            ]
+            self._trust_prompt_open = True
+            self._current_trust_prompt = next_evt
+            try:
+                from textual._context import active_message_pump
+                token = active_message_pump.set(self)
+            except Exception:
+                token = None
+            try:
+                self.push_screen(TrustPromptModal(next_evt), callback=self._on_prompt_dismissed)
+            finally:
+                if token is not None:
+                    active_message_pump.reset(token)
+            return
 
     async def _prune_ui_loop(self) -> None:
         while True:
@@ -3789,6 +3981,7 @@ class ChatApp(App):
         self._log(f"[yellow]File offer from {rich_escape(sender_name)}: {rich_escape(filename)} ({size/1024:.1f} KB)[/yellow]")
         accepted = await self.push_screen_wait(FileOfferModal(sender_name, filename, size))
         self._log(f"[yellow]  -> {'accepted' if accepted else 'rejected'}[/yellow]")
+        self._dequeue_next_trust_prompt()
         return bool(accepted)
 
     def _on_transfer_progress(self, transfer_id: str, done: int, total: int) -> None:

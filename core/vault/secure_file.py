@@ -13,6 +13,7 @@ The real filename is metadata, encrypted alongside the content (§6).
 import json
 import os
 import secrets
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -129,7 +130,7 @@ def encrypt_file(
         size=len(plaintext),
         salt=salt,
         nonce=nonce,
-        encrypted_at=os.path.getmtime(plaintext_path),
+        encrypted_at=time.time(),
         checksum=checksum,
     )
     _save_metadata(secure_storage_dir, metadata)
