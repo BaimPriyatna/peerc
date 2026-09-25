@@ -19,6 +19,8 @@ Commands typed into the input box:
     /copy [last|all]                copy chat to system clipboard
     /clear                          clear chat log
     /info or /me                    show local identity and network details
+    /revoke <device_id> [reason]    locally revoke a device
+    /events                         review recent security events (grouped)
     /lock                           lock the vault now (re-prompt for passphrase)
     /autolock [minutes]             show or set idle auto-lock timeout (default 5)
     /criticalkey [status|set|change|clear]
@@ -55,7 +57,12 @@ from textual.strip import Strip
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, RichLog, TextArea
 
 import chat
-from core.security.events import SecuritySeverity
+from core.security.events import (
+    SecurityEvent,
+    SecuritySeverity,
+    add_listener as add_security_event_listener,
+    remove_listener as remove_security_event_listener,
+)
 from core.events import (
     EventBus,
     NetworkMessageReceived,
@@ -346,6 +353,34 @@ def _format_relative_time(ts: float) -> str:
     return f"{d}d ago"
 
 
+_SECURITY_EVENT_LOG_CAP = 200
+
+
+def _format_severity_label(severity: "SecuritySeverity | str") -> str:
+    """Phase 37.2: text severity labels (no emoji) for the Events view."""
+    name = severity.value if isinstance(severity, SecuritySeverity) else str(severity)
+    if name == "INFO":
+        return "[dim]INFO[/]"
+    if name == "WARNING":
+        return "[yellow]WARN[/]"
+    if name == "HIGH":
+        return "[red]HIGH[/]"
+    if name == "CRITICAL":
+        return "[bold red]CRIT[/]"
+    return name
+
+
+def _group_security_events(events: list[SecurityEvent]) -> list[SecurityEvent]:
+    """Group by (event_type, device_id), keeping the latest timestamp per group."""
+    best: dict[tuple[str, str], SecurityEvent] = {}
+    for ev in events:
+        key = (ev.event_type, ev.device_id or "")
+        prev = best.get(key)
+        if prev is None or ev.timestamp >= prev.timestamp:
+            best[key] = ev
+    return sorted(best.values(), key=lambda e: e.timestamp, reverse=True)
+
+
 class TrustCenterModal(ModalScreen[None]):
     """Phase 36.1: Read-only Trust Center — lists all known devices with
     status filters (All / Pending / Trusted / Revoked).  A device row can
@@ -560,6 +595,7 @@ class TrustDeviceDetailModal(ModalScreen[None]):
                 f"Revoked by: {dev.revoked_by}"
                 + (f"  Reason: {dev.revoke_reason}" if dev.revoke_reason else "")
             )
+        yield from self._render_rotation_section()
         with Horizontal(id="trust-detail-actions"):
             yield Button("Copy Fingerprint", id="td-copy-fp")
             if dev.status == TrustStatus.PENDING:
@@ -568,6 +604,40 @@ class TrustDeviceDetailModal(ModalScreen[None]):
             elif dev.status == TrustStatus.TRUSTED:
                 yield Button("Revoke", id="td-revoke", variant="error")
             yield Button("Close", id="td-close")
+
+    def _render_rotation_section(self) -> ComposeResult:
+        """Phase 37.2: read-only rotation chain (omit if no history)."""
+        app = getattr(self, "app", None)
+        store = getattr(app, "trust_store", None) if app is not None else None
+        if store is None:
+            return
+        try:
+            chain = store.get_rotation_chain(self._device.device_id)
+        except Exception:
+            return
+        if len(chain) <= 1:
+            return
+
+        statuses = {nid: store.get(nid) for nid in chain}
+        tainted = any(
+            d is not None and d.status == TrustStatus.REVOKED
+            for d in statuses.values()
+        )
+        parts: list[str] = []
+        for nid in chain:
+            short = nid[:8]
+            node = statuses.get(nid)
+            if node is not None and node.status == TrustStatus.REVOKED:
+                parts.append(f"[red]{short}[/red]")
+            else:
+                parts.append(f"[dim]{short}[/dim]")
+        yield Label("Rotation history:", id="td-rotation-label")
+        yield Label(" → ".join(parts), id="td-rotation-chain")
+        if tainted:
+            yield Label(
+                "[red]Chain tainted — revoked ancestor present[/red]",
+                id="td-rotation-taint",
+            )
 
     async def _refresh(self, app: "ChatApp") -> None:
         """Re-fetch the device from the store and re-render this view in
@@ -689,6 +759,69 @@ class TrustPromptModal(ModalScreen[None]):
             self.dismiss()
         elif btn in ("tpm-later", "later"):
             self.dismiss()
+
+
+class SecurityEventsModal(ModalScreen[None]):
+    """Phase 37.2: Read-only Security Events view.
+
+    Groups buffered SecurityEvent entries by (event_type, device_id),
+    keeps the latest timestamp per group, and links known device_ids to
+    TrustDeviceDetailModal. Informational only — no approve/reject actions.
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="security-events-dialog"):
+            yield Label("[bold]Security Events[/bold]", id="se-title")
+            yield Label(
+                "[dim]Grouped by type + device (latest only). Read-only.[/dim]",
+                id="se-subtitle",
+            )
+            yield ListView(id="security-events-list")
+            yield Label("", id="security-events-empty")
+            yield Button("Close", id="se-close")
+
+    def on_mount(self) -> None:
+        self._load_events()
+
+    def _load_events(self) -> None:
+        app: ChatApp = self.app  # type: ignore[assignment]
+        list_view = self.query_one("#security-events-list", ListView)
+        empty_label = self.query_one("#security-events-empty", Label)
+        list_view.clear()
+
+        raw = getattr(app, "_security_event_log", None) or []
+        grouped = _group_security_events(list(raw))
+        if not grouped:
+            empty_label.update("[dim]No security events recorded yet.[/dim]")
+            return
+
+        empty_label.update("")
+        for ev in grouped:
+            sev = _format_severity_label(ev.severity)
+            device = (ev.device_id[:8] if ev.device_id else "—")
+            when = _format_relative_time(ev.timestamp)
+            label = (
+                f"{sev}  [bold]{ev.event_type}[/bold]  "
+                f"[dim]{device}[/dim]  [dim]{when}[/dim]"
+            )
+            list_view.append(ListItem(Label(label), name=ev.device_id or ""))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "se-close":
+            self.dismiss()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        device_id = event.item.name
+        if not device_id:
+            return
+        app: ChatApp = self.app  # type: ignore[assignment]
+        if app.trust_store is None:
+            return
+        dev = app.trust_store.get(device_id)
+        if dev is None:
+            self.notify("Device not in trust store.", title="Security Events")
+            return
+        self.app.push_screen(TrustDeviceDetailModal(dev))
 
 
 class NameSetupModal(ModalScreen[str]):
@@ -1171,6 +1304,18 @@ class ChatApp(App):
     #tpm-full-fp { display: none; margin-top: 1; }
     #tpm-fp-actions Button { margin-right: 1; margin-top: 1; }
     #trust-prompt-actions Button { margin-right: 1; margin-top: 1; }
+    #security-events-dialog {
+        align: center middle;
+        background: $panel;
+        border: thick $accent;
+        padding: 1 2;
+        width: 80;
+        height: 28;
+    }
+    #security-events-list { height: 1fr; border: solid $accent; margin-top: 1; }
+    #security-events-empty { color: $text-muted; margin: 1 0; }
+    #se-subtitle { margin-top: 0; }
+    #security-events-dialog Button { margin-top: 1; }
     Screen > .screen--selection {
         background: $primary;
         color: $text;
@@ -1253,6 +1398,10 @@ class ChatApp(App):
         self._trust_prompt_open: bool = False
         self._current_trust_prompt: Optional[TrustRequired] = None
 
+        # Phase 37.2: Security-event review buffer
+        self._security_event_log: list[SecurityEvent] = []
+        self._security_event_listener_registered: bool = False
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="main"):
@@ -1300,6 +1449,8 @@ class ChatApp(App):
         )
         self.event_bus = EventBus()
         self._unhook_security_events = bridge_security_events(self.event_bus)
+        add_security_event_listener(self._on_security_event_buffered)
+        self._security_event_listener_registered = True
 
         # Phase 39.2: unlock (or first-time create) the encrypted vault
         # before anything that needs to read/write persisted state.
@@ -1439,6 +1590,12 @@ class ChatApp(App):
                 error = "That doesn't look like a valid recovery code — try again."
 
     def on_unmount(self) -> None:
+        if self._security_event_listener_registered:
+            remove_security_event_listener(self._on_security_event_buffered)
+            self._security_event_listener_registered = False
+        if self._unhook_security_events is not None:
+            self._unhook_security_events()
+            self._unhook_security_events = None
         # Phase 39.2/39.3: flush and destroy the plaintext working copy
         # on exit — leaving it around defeats the point of the whole
         # unlock/lock lifecycle. Prefer session.lock() so the DEK is
@@ -3820,6 +3977,17 @@ class ChatApp(App):
         color = "red" if evt.severity in ("HIGH", "CRITICAL") else "yellow"
         self._log(f"[{color}][bold]SECURITY {evt.severity}:[/bold] {evt.event_type}{peer_info}[/{color}]")
 
+    def _on_security_event_buffered(self, evt: SecurityEvent) -> None:
+        """Phase 37.2: append every SecurityEvent to the capped review buffer."""
+        self._security_event_log.append(evt)
+        overflow = len(self._security_event_log) - _SECURITY_EVENT_LOG_CAP
+        if overflow > 0:
+            del self._security_event_log[:overflow]
+
+    def _open_security_events(self) -> None:
+        """Phase 37.2: open the read-only Security Events modal."""
+        self.push_screen(SecurityEventsModal())
+
     def _has_blocking_modal(self) -> bool:
         """Check if any blocking modal is currently on the screen stack."""
         if getattr(self, "_relocking", False):
@@ -4049,6 +4217,7 @@ class ChatApp(App):
             self._log(" [bold cyan]/pairs[/bold cyan]                Alias for /devices")
             self._log(" [bold cyan]/trust \u003cdevice_id\u003e[/bold cyan]      Open device detail view")
             self._log(" [bold cyan]/revoke <device_id> [reason][/bold cyan]   Locally revoke a device")
+            self._log(" [bold cyan]/events[/bold cyan]                Review recent security events (grouped)")
             self._log(" [bold cyan]/lock[/bold cyan]                 Lock vault now (Ctrl+L); re-prompt for passphrase")
             self._log(" [bold cyan]/autolock [minutes][/bold cyan]  Show/set idle auto-lock (default 5; 0 = off)")
             self._log(" [bold cyan]/criticalkey [action][/bold cyan] Manage optional Export extra key")
@@ -4328,6 +4497,9 @@ class ChatApp(App):
 
         elif cmd == "/revoke":
             await self._cmd_revoke(arg)
+
+        elif cmd == "/events":
+            self._open_security_events()
 
         elif cmd in ("/groups", "/group"):
             await self._handle_group_command(arg)
