@@ -5,6 +5,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.20.4] — Phase 37.3: Full workflow verification
+
+### Added
+- **Test Coverage**: `tests/test_trust_workflow_integration.py` — 3 end-to-end Textual pilot scenarios chaining the full trust lifecycle: first connection → `TrustRequired` → pending prompt → `Trust` → reconnect as `TRUSTED`; first connection → `Reject` → reconnect as `REVOKED`; and a pending prompt where group policy denies external trust, leaving the device `PENDING` with no state change.
+- Confirms the existing handshake, trust, rotation, group-policy, and vault integration suites still pass unmodified alongside the new Phase 36/37 UI work.
+
+**Phase 37 is now complete**: 37.1 (`1.20.2`), 37.2 (`1.20.3`), and 37.3 (`1.20.4`).
+
+## [1.20.3] — Phase 37.2: Security-event review + rotation history
+
+### Added
+- **Security Events View (`SecurityEventsModal`)**:
+  - Read-only, groups buffered `SecurityEvent` entries by `(event_type, device_id)`, keeping only the latest timestamp per group.
+  - Selecting a row with a known `device_id` opens `TrustDeviceDetailModal` for that device; a key mismatch is shown strictly as a rejected security event, never as an approval choice.
+  - `_on_security_event_buffered()` appends every emitted `SecurityEvent` to an in-memory, capped (`_SECURITY_EVENT_LOG_CAP = 200`) review buffer.
+- **Rotation history in device detail** (`TrustDeviceDetailModal._render_rotation_section()`): reads `TrustStore.get_rotation_chain()` and renders a read-only chain of device IDs, omitted entirely when there's no history; a revoked ancestor anywhere in the chain is highlighted and the whole chain is flagged "tainted."
+- **Command**: `/events` opens the Security Events view.
+- **Test Coverage**: `tests/test_trust_center_4.py`: 8 focused tests covering event grouping, empty state, device-detail linking, mismatch-not-approval, rotation history display, revoked-ancestor tainting, no-history omission, and buffer-via-emit.
+
+## [1.20.2] — Phase 37.1: Event-driven pending prompt
+
+### Added
+- **Trust Prompt (`TrustPromptModal`)**: replaces log-only `TrustRequired` handling with a non-blocking modal — device name, short ID, abbreviated + revealable/copyable full fingerprint, and the observed connection route labelled as untrusted reachability info (not identity evidence). `Trust`, `Reject`, and `Later` actions; `Later` leaves the device `PENDING` and does not touch the connection.
+- **Queueing & dedup**: `_on_trust_required()` deduplicates by `(peer_id, public_key)`, queues behind any blocking modal (file offer, vault unlock/create, recovery-code, critical-action-key) or an already-open prompt, and `_dequeue_next_trust_prompt()` drains the queue once unblocked — but never while the vault is locked. The log entry is retained as an audit-friendly signal alongside the modal.
+- **Vault-lock safety**: `_perform_hard_lock()` clears the queue and dismisses any open `TrustPromptModal` rather than leaving a decision prompt live against a now-locked vault.
+- **Test Coverage**: `tests/test_trust_center_3.py`: 8 focused tests covering prompt display on `TrustRequired`, `Later` leaving `PENDING`, trust/reject from the prompt, same-peer dedup, multi-peer queueing, vault-lock dismissal, and non-blocking behavior alongside a file offer.
+
 ## [1.20.1] — Phase 36.2: Trust decision controls
 
 ### Added

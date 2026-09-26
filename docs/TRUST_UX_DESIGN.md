@@ -1,9 +1,9 @@
 # Trust UX Design
 
-Status: **designed, not yet implemented**. This document resolves Phase 36
-(device and trust UI) and Phase 37 (security decisions). It is the source of
-truth for the user-facing trust flow; `core/trust/` remains the source of
-truth for trust state and authorization.
+Status: **implemented** (Phase 36: `1.20.0`–`1.20.1`; Phase 37: `1.20.2`–`1.20.4`).
+This document resolves Phase 36 (device and trust UI) and Phase 37 (security
+decisions). It remains the source of truth for the user-facing trust flow;
+`core/trust/` remains the source of truth for trust state and authorization.
 
 ## 1. Goal and Scope
 

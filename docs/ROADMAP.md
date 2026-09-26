@@ -135,6 +135,9 @@ endpoint_update.py` for the shape to copy.
 | `1.19.3` | 46.4 | Phase 46.4: `/group relay <id> on|off` enables or disables in-memory relay hosting for an active group, independently of Rendezvous. Completes Phase 46 |
 | `1.20.0` | 36.1 | Phase 36.1: Trust Center read-only device inventory (`/devices [pending]`, `/pairs`, `/trust <id>`, `TrustCenterModal`, `TrustDeviceDetailModal`; status filters, safe empty and vault-locked states, fingerprint clipboard copy) |
 | `1.20.1` | 36.2 | Phase 36.2: Trust decisions: approve/revoke actions in `TrustDeviceDetailModal` + `TrustConfirmModal` + `/revoke <id> [reason]`; group policy denial handling and idempotence guards |
+| `1.20.2` | 37.1 | Phase 37.1: Event-driven pending prompt (`TrustPromptModal`) replacing log-only `TrustRequired` handling; dedup by `(peer_id, public_key)`, queued behind blocking modals (file offer, vault unlock/create, recovery-code, critical-action-key), drained via `_dequeue_next_trust_prompt()`; vault hard-lock clears the queue and dismisses any open prompt |
+| `1.20.3` | 37.2 | Phase 37.2: Security Events view (`SecurityEventsModal`, grouped by type+device, links to device detail) and read-only rotation-chain history in `TrustDeviceDetailModal` (tainted-chain highlighting on a revoked ancestor); `/events` command |
+| `1.20.4` | 37.3 | Phase 37.3: Full workflow verification — end-to-end pilot tests chaining pending→approve→trusted and pending→reject→revoked reconnects, plus policy-denial-in-prompt. **Phase 37 complete** |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -316,10 +319,10 @@ numeric phase order in the plan doc:
    45.3 `1.18.8`)
 2. **Phase 46 — NAT Traversal & Relay** (complete: 46.1 `1.19.0`,
    46.2 `1.19.1`, 46.3 `1.19.2`, 46.4 `1.19.3`)
-3. **Phase 36/37 — UI/security UX** (in progress: 36.1 `1.20.0` & 36.2 `1.20.1` complete; next: 37.1 `1.20.2` event-driven pending prompt) <- next
-4. Phase 28-35 — logging, performance, concurrency, state machines,
-   error protocol (design resolved in `RELIABILITY_DESIGN.md`; starts after
-   Phase 36/37 with logging and reliability taxonomy)
+3. **Phase 36/37 — UI/security UX** (complete: 36.1 `1.20.0`, 36.2 `1.20.1`,
+   37.1 `1.20.2`, 37.2 `1.20.3`, 37.3 `1.20.4`)
+4. **Phase 28-35 — logging, performance, concurrency, state machines,
+   error protocol** (design resolved in `RELIABILITY_DESIGN.md`) <- next
 5. Phase 38 — Project structure final (design resolved in
    `PROJECT_STRUCTURE_DESIGN.md`; deferred until Phase 36/37 and 28-35
    stabilize)
