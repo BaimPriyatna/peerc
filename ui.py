@@ -34,6 +34,7 @@ Cursor & Mouse:
     - Click any peer in the sidebar list to switch conversation target.
 """
 
+import argparse
 import asyncio
 import base64
 import os
@@ -79,6 +80,7 @@ from core.trust.store import DEFAULT_DB_PATH as TRUST_DB_LEGACY_PATH
 from core.trust.store import TrustStore
 from core.trust.device import TrustedDevice, TrustStatus
 from core.trust.revocation import revoke_device, RevocationError
+from core.logging_setup import configure_logging
 from core.identity.fingerprint import format_fingerprint, short_fingerprint
 from core.group import (
     AdminStatus,
@@ -1402,6 +1404,10 @@ class ChatApp(App):
         self._security_event_log: list[SecurityEvent] = []
         self._security_event_listener_registered: bool = False
 
+        # Phase 28.1: set by main() from --diagnostic/--debug; False when
+        # ChatApp() is constructed directly (e.g. tests, no CLI parsing).
+        self._diagnostic_mode: bool = False
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="main"):
@@ -1538,6 +1544,11 @@ class ChatApp(App):
 
         log = self.query_one("#chat-log", SelectableRichLog)
         log.write(f"[bold cyan]Started as {self.display_name} · {self.device_model} (id: {self.peer_id[:8]})[/bold cyan]")
+        if self._diagnostic_mode:
+            log.write(
+                "[yellow]⚠ Diagnostic logging is ON for this run "
+                f"(~/.peerc/diagnostics.log).[/yellow]"
+            )
         log.write("Waiting for peers... use [bold yellow]/help[/bold yellow] for commands.")
         timeout_m = self.vault_session.auto_lock_seconds / 60.0
         if self.vault_session.auto_lock_seconds == 0:
@@ -4637,7 +4648,21 @@ class ChatApp(App):
 
 def main() -> None:
     """CLI entrypoint for peerc."""
-    ChatApp().run()
+    parser = argparse.ArgumentParser(prog="peerc", description="Peer-to-peer encrypted chat")
+    parser.add_argument(
+        "--diagnostic", action="store_true",
+        help="Enable INFO-level diagnostic logging to ~/.peerc/diagnostics.log for this run",
+    )
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="Enable DEBUG-level diagnostic logging for this run (opt-in, single run only)",
+    )
+    args = parser.parse_args()
+    configure_logging(diagnostic_mode=args.diagnostic, debug=args.debug)
+
+    app = ChatApp()
+    app._diagnostic_mode = args.debug or args.diagnostic
+    app.run()
 
 
 if __name__ == "__main__":

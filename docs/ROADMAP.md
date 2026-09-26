@@ -138,6 +138,7 @@ endpoint_update.py` for the shape to copy.
 | `1.20.2` | 37.1 | Phase 37.1: Event-driven pending prompt (`TrustPromptModal`) replacing log-only `TrustRequired` handling; dedup by `(peer_id, public_key)`, queued behind blocking modals (file offer, vault unlock/create, recovery-code, critical-action-key), drained via `_dequeue_next_trust_prompt()`; vault hard-lock clears the queue and dismisses any open prompt |
 | `1.20.3` | 37.2 | Phase 37.2: Security Events view (`SecurityEventsModal`, grouped by type+device, links to device detail) and read-only rotation-chain history in `TrustDeviceDetailModal` (tainted-chain highlighting on a revoked ancestor); `/events` command |
 | `1.20.4` | 37.3 | Phase 37.3: Full workflow verification — end-to-end pilot tests chaining pending→approve→trusted and pending→reject→revoked reconnects, plus policy-denial-in-prompt. **Phase 37 complete** |
+| `1.21.0` | 28.1 | Phase 28.1: Logging foundation — `core/logging_setup.py` [NEW]: single startup `configure_logging()` for the `peerc` logger tree, rotating file handler at `~/.peerc/diagnostics.log`, `WARNING`/`INFO`/`DEBUG` policy via `--diagnostic`/`--debug` CLI flags, redacting filter for forbidden structured fields, no propagation to the UI or library root logger. `discovery.py`'s logger renamed to `peerc.discovery`. Begins Phase 28-35 (Reliability program) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -322,7 +323,8 @@ numeric phase order in the plan doc:
 3. **Phase 36/37 — UI/security UX** (complete: 36.1 `1.20.0`, 36.2 `1.20.1`,
    37.1 `1.20.2`, 37.2 `1.20.3`, 37.3 `1.20.4`)
 4. **Phase 28-35 — logging, performance, concurrency, state machines,
-   error protocol** (design resolved in `RELIABILITY_DESIGN.md`) <- next
+   error protocol** (design resolved in `RELIABILITY_DESIGN.md`; in
+   progress: 28.1 `1.21.0` complete; next: 29/30.1 reliability taxonomy) <- next
 5. Phase 38 — Project structure final (design resolved in
    `PROJECT_STRUCTURE_DESIGN.md`; deferred until Phase 36/37 and 28-35
    stabilize)

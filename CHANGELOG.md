@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.21.0] — Phase 28.1: Operational logging foundation
+
+### Added
+- **`core/logging_setup.py`** [NEW]: single startup configuration point for the `peerc` logger tree (`peerc.transport`, `peerc.protocol`, `peerc.transfer`, `peerc.vault`, `peerc.ui`, `peerc.security`, `peerc.discovery`, ...), resolving RELIABILITY_DESIGN.md §2.
+  - `configure_logging(diagnostic_mode=False, debug=False, log_path=None)`: rotating file handler (`~/.peerc/diagnostics.log`, 5 MB × 3 backups, same dotfolder convention as `TrustStore`/vault paths) at `WARNING`+ by default, `INFO`+ in diagnostic mode, `DEBUG`+ in single-run debug mode (visibly marked with a log line). Idempotent — re-configuring replaces the previously-installed handler rather than stacking duplicates.
+  - `_RedactingFilter`: installed once at the root `peerc` logger; strips a forbidden-field allowlist (`passphrase`, `private_key`, `session_key`, `dek`, `recovery_code`, `link_pin`, `pin`, `endpoint_link`, `vault_plaintext`, `chat_content`, `file_content`, ...) from any record's structured `extra` fields, regardless of which child logger emitted it. `core.security.events` is untouched — no competing security-event path.
+  - Root `peerc` logger does not propagate to the library root logger, keeping diagnostics out of the Textual UI.
+- **`ui.py`**: `main()` gains `--diagnostic` / `--debug` CLI flags wired to `configure_logging()`; a startup log line visibly marks diagnostic mode when active.
+- **`discovery.py`**: logger renamed from bare `__name__` to `peerc.discovery`, joining the `peerc` tree instead of sitting outside it.
+- **Test Coverage**: `tests/test_logging_setup.py`: 9 focused tests covering rotating-file creation, default `WARNING` policy, diagnostic/debug level escalation with visible markers, forbidden-field redaction (including a full sweep of the forbidden-field set), allowed-field passthrough, idempotent re-configuration, non-propagation, and the `discovery.py` logger rename.
+
 ## [1.20.4] — Phase 37.3: Full workflow verification
 
 ### Added

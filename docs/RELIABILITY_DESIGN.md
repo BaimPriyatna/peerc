@@ -1,9 +1,10 @@
 # Reliability Design: Phases 28-35
 
-Status: **designed, not yet implemented as one reliability program**. This
-document resolves the remaining work in Phases 28-35: operational logging,
-test strategy, performance measurement, asyncio ownership, explicit state
-machines, and the encrypted application-error protocol.
+Status: **in progress** — 28.1 (`1.21.0`) complete; 29/30.1 onward not yet
+implemented. This document resolves the remaining work in Phases 28-35:
+operational logging, test strategy, performance measurement, asyncio
+ownership, explicit state machines, and the encrypted application-error
+protocol.
 
 ## 1. Scope and Baseline
 

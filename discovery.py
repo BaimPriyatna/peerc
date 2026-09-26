@@ -70,7 +70,7 @@ try:
 except ImportError:
     MDNS_AVAILABLE = False
 
-_log = logging.getLogger(__name__)
+_log = logging.getLogger("peerc.discovery")
 
 BROADCAST_PORT = 9999
 ANNOUNCE_INTERVAL = 3.0   # seconds between announces
