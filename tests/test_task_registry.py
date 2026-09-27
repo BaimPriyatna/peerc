@@ -27,6 +27,18 @@ async def _quick_done(value: int = 1) -> int:
     return value
 
 
+async def _ignores_cancellation_once() -> None:
+    """Simulates a task that doesn't react to the *first* cancellation
+    within the bound — e.g. one slow retry in a try/except that swallows
+    CancelledError — but does stop on a second one, so the test can
+    still clean it up afterward instead of leaking an immortal task."""
+    try:
+        await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass  # swallow the first one — deliberately misbehaving
+    await asyncio.sleep(3600)  # second cancel() will land here normally
+
+
 async def _boom() -> None:
     await asyncio.sleep(0)
     raise ValueError("boom")
@@ -112,3 +124,42 @@ async def test_cancel_all_is_safe_with_no_tasks():
     reg = TaskRegistry()
     await reg.cancel_all()  # must not raise
     assert reg.active_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_cancel_group_bounded_wait_logs_on_deadline_miss(caplog):
+    """Phase 33.1: closes the deferred Phase 32.1 gap — a task that
+    doesn't finish unwinding within the deadline gets a sanitized warning
+    logged, and is dropped from tracking anyway rather than leaving
+    cancel_group() waiting forever."""
+    reg = TaskRegistry()
+    task = reg.create_task(_ignores_cancellation_once(), group="transfer", name="stuck-task")
+    # Let it actually start running (reach its try/except) before
+    # cancelling — cancel()ing a task before its first step means the
+    # CancelledError is thrown before the coroutine body (and its
+    # except-and-swallow) ever runs, so it cancels cleanly instead of
+    # exercising the "ignores cancellation" behavior this test needs.
+    await asyncio.sleep(0)
+
+    with caplog.at_level(logging.WARNING, logger="peerc.tasks"):
+        await reg.cancel_group("transfer", timeout=0.1)
+
+    assert reg.active_count("transfer") == 0  # dropped from tracking regardless
+    assert any("missed its" in r.getMessage() and "stuck-task" in r.getMessage() for r in caplog.records)
+
+    # Clean up the real, still-running task so it doesn't leak into
+    # other tests / warn on interpreter shutdown.
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_cancel_group_within_deadline_logs_nothing(caplog):
+    reg = TaskRegistry()
+    reg.create_task(_sleep_forever(), group="app", name="well-behaved")
+
+    with caplog.at_level(logging.WARNING, logger="peerc.tasks"):
+        await reg.cancel_group("app", timeout=1.0)  # well-behaved task cancels almost instantly
+
+    assert not any("missed its" in r.getMessage() for r in caplog.records)

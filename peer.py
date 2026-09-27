@@ -45,6 +45,7 @@ from core.transport import (
 from core.transport.timeout import ConnectionClosedError, TransportError
 from core.trust.store import TrustDecision, TrustStore
 from core.task_registry import TaskRegistry
+from core.connection_state import ConnectionState, ConnectionStateMachine, InvalidConnectionTransition
 
 OnMessage = Callable[[str, dict], Awaitable[None]]  # (peer_addr_key, message) -> None
 
@@ -90,6 +91,18 @@ class ConnectionManager:
         # so existing callers/tests that don't pass one are unaffected.
         self._task_registry = task_registry
         self._connections: dict[str, SecureSession] = {}
+        # Phase 33.1: one ConnectionStateMachine per addr_key currently in
+        # _connections (added/removed together). By the time
+        # ConnectionManager ever sees a session, accept_secure_session()/
+        # initiate_secure_session() has already run the whole handshake
+        # atomically -- there's no hook into TCP_CONNECTED/HANDSHAKING as
+        # separately-observable steps without instrumenting core.crypto
+        # itself, which is out of scope here. _register_session() fast-
+        # forwards through them (each still individually validated by the
+        # transition table) so the two things that actually matter
+        # operationally -- the ESTABLISHED guard before dispatching a
+        # frame, and idempotent CLOSING/CLOSED on teardown -- are real.
+        self._connection_states: dict[str, ConnectionStateMachine] = {}
         self._server: Optional[asyncio.base_events.Server] = None
         # Phase 46.1: relay-tunnel plumbing. Both dicts are keyed by the
         # addr_key of a real, already-established session — never by a
@@ -104,6 +117,23 @@ class ConnectionManager:
         # _tunnel_r_keys: maps tunneled session addr_key -> underlying relay r_addr_key.
         # Used to unregister relay tunnel upon session teardown.
         self._tunnel_r_keys: dict[str, str] = {}
+
+    def _mark_closing(self, addr_key: str) -> None:
+        """Phase 33.1: best-effort, defensive transition to CLOSING from
+        a send-path failure. This connection's own _read_loop is what
+        does the full CLOSED cleanup (it may already have — .get()
+        returning None here just means someone else got there first,
+        which is fine)."""
+        fsm = self._connection_states.get(addr_key)
+        if fsm is not None and not fsm.is_terminal():
+            fsm.transition_to(ConnectionState.CLOSING)
+
+    def get_connection_state(self, addr_key: str) -> Optional[ConnectionState]:
+        """Introspection/testing hook — the connection lifecycle state
+        for addr_key, or None if it was never registered (or has already
+        been fully torn down and popped)."""
+        fsm = self._connection_states.get(addr_key)
+        return fsm.state if fsm is not None else None
 
     def _spawn(self, coro, *, name: str) -> asyncio.Task:
         """Phase 32.1: tracked task creation — falls back to a bare
@@ -195,6 +225,15 @@ class ConnectionManager:
 
     async def _register_session(self, session: SecureSession, incoming: bool) -> None:
         self._connections[session.addr_key] = session
+        fsm = ConnectionStateMachine()
+        for state in (
+            ConnectionState.TCP_CONNECTED,
+            ConnectionState.HANDSHAKING,
+            ConnectionState.AUTHENTICATED,
+            ConnectionState.ESTABLISHED,
+        ):
+            fsm.transition_to(state)
+        self._connection_states[session.addr_key] = fsm
         if self.event_bus:
             from core.events import PeerConnected, TrustRequired
             await self.event_bus.publish(
@@ -225,6 +264,15 @@ class ConnectionManager:
         try:
             while True:
                 kind, payload = await session.receive()
+                # Phase 33.1: a send-path failure elsewhere (send()/
+                # send_binary()/send_relay_data()) may have already
+                # transitioned this connection to CLOSING while this
+                # loop's receive() call was returning one more
+                # already-buffered frame -- reject it rather than
+                # dispatching against a connection that's on its way out.
+                fsm = self._connection_states.get(session.addr_key)
+                if fsm is not None:
+                    fsm.require_established(f"dispatching a {kind!r} frame")
                 if kind == "json":
                     protocol.validate_message(payload)  # raises ProtocolError if malformed
                     if self.event_bus:
@@ -299,7 +347,13 @@ class ConnectionManager:
             pass  # peer disconnected
         except (protocol.ProtocolError, TransportError):
             pass  # malformed frame, or a decryption/replay failure — drop the connection
+        except InvalidConnectionTransition:
+            pass  # a frame arrived after this connection left ESTABLISHED — drop it
         finally:
+            fsm = self._connection_states.pop(session.addr_key, None)
+            if fsm is not None:
+                fsm.transition_to(ConnectionState.CLOSING)
+                fsm.transition_to(ConnectionState.CLOSED)
             self._connections.pop(session.addr_key, None)
             self.close_relay_pipe(session.addr_key)
             r_key = self._tunnel_r_keys.pop(session.addr_key, None)
@@ -325,6 +379,7 @@ class ConnectionManager:
             return True
         except (ConnectionClosedError, ConnectionResetError, BrokenPipeError, TransportError):
             self._connections.pop(addr_key, None)
+            self._mark_closing(addr_key)
             return False
 
     async def send_binary(self, addr_key: str, payload: bytes) -> bool:
@@ -337,6 +392,7 @@ class ConnectionManager:
             return True
         except (ConnectionClosedError, ConnectionResetError, BrokenPipeError, TransportError):
             self._connections.pop(addr_key, None)
+            self._mark_closing(addr_key)
             return False
 
     async def send_relay_data(self, addr_key: str, payload: bytes) -> bool:
@@ -352,6 +408,7 @@ class ConnectionManager:
             return True
         except (ConnectionClosedError, ConnectionResetError, BrokenPipeError, TransportError):
             self._connections.pop(addr_key, None)
+            self._mark_closing(addr_key)
             return False
 
     def open_relay_pipe(self, addr_key_a: str, addr_key_b: str) -> None:
@@ -503,8 +560,13 @@ class ConnectionManager:
         return bytes.fromhex(session.peer_public_key)
 
     async def close_all(self) -> None:
-        for session in list(self._connections.values()):
+        for addr_key, session in list(self._connections.items()):
+            self._mark_closing(addr_key)
             await session.close()
+        # Each session's _read_loop will independently reach its own
+        # finally block (session.close() unblocks its pending receive())
+        # and finish the CLOSING -> CLOSED transition + dict pop itself;
+        # nothing further to do to _connection_states here.
         self._connections.clear()
         if self._server:
             self._server.close()

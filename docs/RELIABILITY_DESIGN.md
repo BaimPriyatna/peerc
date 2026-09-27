@@ -1,12 +1,13 @@
 # Reliability Design: Phases 28-35
 
-Status: **in progress** — 28.1 (`1.21.0`), 29/30.1 (`1.21.1`), and 31.1
-(`1.21.2`) complete (29/30.1 also delivered the core of Phase 32.1's
-task registry, pulled forward at Baim's direction); 33.1 onward not yet
-implemented. This document resolves the remaining work in Phases 28-35:
-operational logging, test strategy, performance measurement, asyncio
-ownership, explicit state machines, and the encrypted application-error
-protocol.
+Status: **in progress** — 28.1 (`1.21.0`), 29/30.1 (`1.21.1`), 31.1
+(`1.21.2`), and 33.1 (`1.21.3`) complete. Phase 32.1 (task registry) is
+now fully done, split across 29/30.1 (the registry itself, pulled
+forward at Baim's direction) and 33.1 (the bounded-wait/warning-on-
+deadline-miss it was still missing). 34.1 onward not yet implemented.
+This document resolves the remaining work in Phases 28-35: operational
+logging, test strategy, performance measurement, asyncio ownership,
+explicit state machines, and the encrypted application-error protocol.
 
 ## 1. Scope and Baseline
 

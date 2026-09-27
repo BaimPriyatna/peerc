@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.21.3] — Phase 33.1: Connection lifecycle FSM (+ closed deferred Phase 32.1 gap)
+
+### Added
+- **`core/connection_state.py`** [NEW]: `ConnectionState` (`NEW`/`TCP_CONNECTED`/`HANDSHAKING`/`AUTHENTICATED`/`ESTABLISHED`/`CLOSING`/`CLOSED`) and `ConnectionStateMachine` per RELIABILITY_DESIGN.md §6.1 — an internal safety contract, not a wire message. `transition_to()` is the only mutator; illegal transitions raise `InvalidConnectionTransition`, but `CLOSING`/`CLOSED` are idempotent (a late frame, timeout, or duplicate close can't revive a connection or raise). `require_established()` guards application-frame dispatch.
+- **`peer.py`**: `ConnectionManager` now keeps one `ConnectionStateMachine` per addr_key. Scoping note: `accept_secure_session()`/`initiate_secure_session()` already run the whole handshake atomically before `ConnectionManager` ever sees a session, so there's no hook into `TCP_CONNECTED`/`HANDSHAKING` as separately-observable steps without instrumenting `core.crypto` itself (out of scope here) — `_register_session()` fast-forwards through them (each still individually validated). `_read_loop()` now calls `require_established()` before dispatching each frame (catches a real race: a send-path failure elsewhere can move a connection to `CLOSING` while `_read_loop` is still returning one more already-buffered frame). `send()`/`send_binary()`/`send_relay_data()` mark `CLOSING` defensively on failure; `close_all()` does the same before closing each session. `get_connection_state(addr_key)` added for introspection/tests.
+- **Closed the deferred Phase 32.1 gap**: `core/task_registry.py`'s `cancel_group()`/`cancel_all()` now take a `timeout` (default 5s) — `asyncio.wait(..., timeout=...)` instead of an unbounded `gather()`, with a sanitized warning logged (group, count, task names — never exception content) if a task misses the deadline. A stuck task is still dropped from tracking either way, so it can't leave a group permanently "active."
+- **Test Coverage**: `tests/test_connection_fsm.py` (14, unit): the transition table itself — happy paths, illegal skips/backwards moves, idempotent terminal states, the guard. `tests/test_connection_fsm_integration.py` (4, integration): wired into real `ConnectionManager` pairs — reaches `ESTABLISHED` after a real handshake, reaches `CLOSED` after disconnect, a duplicate/racing close doesn't raise or resurrect, a late frame after `CLOSING` is dropped before `on_message`. `tests/test_task_registry.py`: +2 for the bounded-wait/deadline-miss logging.
+- **Full suite**: 589 passed, 1 skipped, 7 deselected (was 583 before this sub-step).
+
 ## [1.21.2] — Phase 31.1: Performance baselines
 
 ### Added

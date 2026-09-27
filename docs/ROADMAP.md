@@ -141,6 +141,7 @@ endpoint_update.py` for the shape to copy.
 | `1.21.0` | 28.1 | Phase 28.1: Logging foundation — `core/logging_setup.py` [NEW]: single startup `configure_logging()` for the `peerc` logger tree, rotating file handler at `~/.peerc/diagnostics.log`, `WARNING`/`INFO`/`DEBUG` policy via `--diagnostic`/`--debug` CLI flags, redacting filter for forbidden structured fields, no propagation to the UI or library root logger. `discovery.py`'s logger renamed to `peerc.discovery`. Begins Phase 28-35 (Reliability program) |
 | `1.21.1` | 29/30.1 | Phase 29/30.1: Reliability taxonomy — pytest markers (`unit`/`integration`/`ui`/`security`/`benchmark`) applied to all 52 test files; `core/task_registry.py` [NEW] `TaskRegistry` (Phase 32.1 pulled forward at Baim's direction) wired into `ConnectionManager`/`ChatSession`/`FileTransferSession`/`ChatApp`; `_perform_hard_lock()`/`on_unmount()` now cancel+await in-flight tasks (the concrete gap this closed); `/lock` missing-`await` bug fixed; 4 of 7 required reliability cases covered (cancellation, duplicate/late ack, peer disconnect mid-transfer, task cleanup), 3 explicitly deferred to Phase 31.1/33-34/35 |
 | `1.21.2` | 31.1 | Phase 31.1: Performance baselines — `core/benchmarking.py` [NEW] (`EventLoopLagSampler`, `peak_rss_mb()`, `record_metric()`); `tests/test_benchmarks.py` [NEW] (marker `benchmark`, non-gating) records all 5 §4 metrics into `docs/benchmarks/baseline.json`. `pyproject.toml` excludes `benchmark` from a plain `pytest` run by default. Fixed a real CI gap found along the way: `.github/workflows/tests.yml`'s `test` job only ran 8 hardcoded files, never the full suite — now runs plain `pytest` (full 569), plus a separate non-gating `benchmark` job |
+| `1.21.3` | 33.1 | Phase 33.1: Connection lifecycle FSM — `core/connection_state.py` [NEW] `ConnectionState`/`ConnectionStateMachine` (§6.1's 7-state table, idempotent CLOSING/CLOSED, `require_established()` guard); wired into `peer.py`'s `ConnectionManager` (`_register_session`, `_read_loop`, `send*()`, `close_all()`, `get_connection_state()`). Also closed the deferred Phase 32.1 gap: `TaskRegistry.cancel_group()`/`cancel_all()` now bound their wait (default 5s) and log a sanitized warning on a deadline miss |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -326,9 +327,10 @@ numeric phase order in the plan doc:
    37.1 `1.20.2`, 37.2 `1.20.3`, 37.3 `1.20.4`)
 4. **Phase 28-35 — logging, performance, concurrency, state machines,
    error protocol** (design resolved in `RELIABILITY_DESIGN.md`; in
-   progress: 28.1 `1.21.0`, 29/30.1 `1.21.1`, 31.1 `1.21.2` complete —
-   29/30.1 also delivered the core of Phase 32.1's task registry,
-   pulled forward; next: remaining 32.1, or 33.1 Connection FSM) <- next
+   progress: 28.1 `1.21.0`, 29/30.1 `1.21.1`, 31.1 `1.21.2`, 33.1
+   `1.21.3` complete — Phase 32.1 (task registry + bounded-wait/warning)
+   is now fully done, folded into 29/30.1 and 33.1; next: 34.1 Transfer
+   FSM) <- next
 5. Phase 38 — Project structure final (design resolved in
    `PROJECT_STRUCTURE_DESIGN.md`; deferred until Phase 36/37 and 28-35
    stabilize)

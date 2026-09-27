@@ -22,6 +22,14 @@ from typing import Coroutine, Dict, List, Optional, Set
 
 logger = logging.getLogger("peerc.tasks")
 
+# Phase 33.1 (closing the deferred Phase 32.1 gap): "Cleanup uses
+# cancellation followed by a bounded wait, and logs a sanitized warning
+# if a task misses the deadline." Five seconds is generous for a task
+# that's genuinely just unwinding (closing files, flushing a socket) —
+# a task that needs longer than this to react to cancellation is the
+# scenario this bound exists to surface, not silently wait out forever.
+DEFAULT_CANCEL_TIMEOUT = 5.0
+
 
 class TaskRegistry:
     """Tracks background tasks by named group so a caller can cancel and
@@ -60,19 +68,34 @@ class TaskRegistry:
         """Names of groups with at least one currently-tracked task."""
         return [g for g, tasks in self._tasks.items() if tasks]
 
-    async def cancel_group(self, group: str) -> None:
-        """Cancel every task in `group` and wait for them to actually
-        finish unwinding before returning — a caller relying on this can
-        assume no task from that group touches shared state afterward."""
+    async def cancel_group(self, group: str, timeout: float = DEFAULT_CANCEL_TIMEOUT) -> None:
+        """Cancel every task in `group` and wait, up to `timeout` seconds,
+        for them to actually finish unwinding before returning — a caller
+        relying on this can assume no task from that group touches shared
+        state afterward.
+
+        A task that is still running once the deadline passes gets a
+        sanitized warning logged (group, count, and the task's own name
+        — never its exception content or any application data) rather
+        than an unbounded wait; it's dropped from tracking either way, so
+        a stuck task can't leave this group permanently "active"."""
         tasks = list(self._tasks.get(group, ()))
         if not tasks:
             return
         for t in tasks:
             t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        _done, pending = await asyncio.wait(tasks, timeout=timeout)
+        if pending:
+            logger.warning(
+                "task cleanup in group %r missed its %.1fs deadline: "
+                "%d task(s) still running (%s)",
+                group, timeout, len(pending),
+                ", ".join(t.get_name() for t in pending),
+            )
         self._tasks.pop(group, None)
 
-    async def cancel_all(self) -> None:
-        """Bounded shutdown: cancel and await every group."""
+    async def cancel_all(self, timeout: float = DEFAULT_CANCEL_TIMEOUT) -> None:
+        """Bounded shutdown: cancel and await every group, each against
+        its own `timeout` (not a shared budget across all groups)."""
         for group in list(self._tasks.keys()):
-            await self.cancel_group(group)
+            await self.cancel_group(group, timeout=timeout)
