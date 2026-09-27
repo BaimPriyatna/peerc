@@ -30,8 +30,8 @@ jobs:
           pip install -e .
           pip install pytest pytest-asyncio
 
-      - name: Run pytest suite (full test suite)
-        run: pytest tests/test_security_fixes.py tests/test_upgrade_fixes.py tests/test_handshake.py tests/test_kdf.py tests/test_encryption.py tests/test_transport.py tests/test_file_transfer_v2.py tests/test_rotation.py tests/test_security_events.py -v
+      - name: Run pytest suite (full test suite, benchmark tests excluded by default)
+        run: pytest -v
 
       - name: Run stage sanity scripts
         run: |
@@ -39,6 +39,41 @@ jobs:
           python tests/test_stage3.py
           python tests/test_stage4.py
           python tests/test_stage5.py
+
+  benchmark:
+    name: Performance baselines (Python ${{ matrix.python-version }}, non-gating)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package + dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio
+
+      - name: Run benchmark suite (Phase 31.1 — records docs/benchmarks/baseline.json, never fails the build)
+        run: pytest -v -m benchmark
+
+      - name: Upload recorded baseline
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-baseline
+          path: docs/benchmarks/baseline.json
+          if-no-files-found: ignore
 
   secret-scan:
     name: Guard against committed secrets

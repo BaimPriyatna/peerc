@@ -1,0 +1,38 @@
+{
+  "event_loop_max_lag_sec_during_transfer": {
+    "recorded_at": 1790475999.2726007,
+    "sample_interval_sec": 0.01,
+    "value": 0.014098795999984759
+  },
+  "handshake_latency_direct_sec": {
+    "recorded_at": 1790475999.2762303,
+    "value": 0.0010987090000185162
+  },
+  "handshake_latency_relay_sec": {
+    "recorded_at": 1790476001.688622,
+    "value": 0.0017617390000168598
+  },
+  "peak_memory_during_transfer_mb": {
+    "delta_mb": 0.0,
+    "fixture_bytes": 32000000,
+    "recorded_at": 1790475999.0394294,
+    "value": 100.546875
+  },
+  "shutdown_time_sec_11_tasks": {
+    "recorded_at": 1790476003.693805,
+    "task_count": 11,
+    "value": 0.00021932399999968766
+  },
+  "transfer_throughput_direct_bytes_per_sec": {
+    "elapsed_sec": 0.04100816099997928,
+    "fixture_bytes": 8000000,
+    "recorded_at": 1790475996.1486115,
+    "value": 195083120.16244867
+  },
+  "transfer_throughput_relay_bytes_per_sec": {
+    "elapsed_sec": 0.06707802399995444,
+    "fixture_bytes": 8000000,
+    "recorded_at": 1790475996.6524343,
+    "value": 119264097.58291976
+  }
+}

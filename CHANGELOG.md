@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.21.2] — Phase 31.1: Performance baselines
+
+### Added
+- **`core/benchmarking.py`** [NEW]: `EventLoopLagSampler` (periodic loop-lag sampling while a workload runs), `peak_rss_mb()` (platform-normalized peak RSS), `record_metric()`/`load_baseline()` (merge-not-overwrite JSON recorder).
+- **`tests/test_benchmarks.py`** [NEW] (marker `benchmark`): non-gating — measures and records, never asserts a regression threshold (nothing to regress against yet). Covers all 5 metrics from RELIABILITY_DESIGN.md §4: transfer throughput (direct + relayed), peak memory during a 32 MB transfer, event-loop max lag during a transfer, handshake latency (direct + relayed), and shutdown time cancelling 11 tasks across all three `TaskRegistry` groups (now measurable thanks to 29/30.1's registry).
+- **`docs/benchmarks/baseline.json`** [NEW]: first recorded baseline — 7 metrics, deterministic local fixtures and loopback connections only, no public-network numbers.
+- **`pyproject.toml`**: `addopts = "-m 'not benchmark'"` — benchmark tests excluded from a plain `pytest` run by default; `pytest -m benchmark` opts in explicitly.
+- **`.github/workflows/tests.yml`**: fixed a real gap found while wiring this in — the `test` job was only ever running 8 explicitly-named test files (`test_security_fixes.py`, `test_upgrade_fixes.py`, `test_handshake.py`, `test_kdf.py`, `test_encryption.py`, `test_transport.py`, `test_file_transfer_v2.py`, `test_security_events.py`) plus 4 standalone stage-sanity scripts, never the full suite. Now runs plain `pytest` (all 569 non-benchmark tests via the Phase 29/30.1 markers). Added a separate `benchmark` job (`continue-on-error: true`, uploads `docs/benchmarks/baseline.json` as an artifact) so slow/timing-sensitive benchmark runs never gate merges.
+- **Test Coverage**: 7 new benchmark tests (marker `benchmark`, excluded from the `569 passed` default count). Full default suite unchanged at 569 passed, 1 skipped, 7 deselected.
+
 ## [1.21.1] — Phase 29/30.1: Reliability taxonomy + task ownership (pulled forward)
 
 ### Added
