@@ -18,6 +18,10 @@ from core.group.store import GroupStore, MembershipStatus
 from core.identity.device_identity import generate_keypair
 from core.vault.database import VaultDatabase
 
+import pytest
+pytestmark = pytest.mark.security
+
+
 
 def test_group_store_shares_vault_connection(tmp_path):
     vault_db_path = str(tmp_path / "vault.db")

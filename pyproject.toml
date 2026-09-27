@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "peerc"
-version = "1.21.0"
+version = "1.21.1"
 description = "Peer-to-peer terminal chat and file transfer application"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,3 +37,10 @@ packages = ["core", "core.protocol", "core.identity", "core.trust", "core.crypto
 [tool.pytest.ini_options]
 pythonpath = ["."]
 asyncio_mode = "auto"
+markers = [
+    "unit: fast, no I/O, no event loop dependency beyond a single coroutine under test",
+    "integration: exercises two or more real components together (e.g. two ConnectionManagers over a real socket)",
+    "ui: drives the Textual App via app.run_test()/Pilot",
+    "security: handshake, trust, vault, group-policy, or crypto behavior where a failure is a security regression",
+    "benchmark: measures performance against a budget (Phase 31+; none yet — reserved)",
+]

@@ -19,6 +19,10 @@ from core.identity.device_identity import generate_keypair
 from core.transport.secure import TYPE_JSON
 from peer import ConnectionManager
 
+import pytest
+pytestmark = pytest.mark.security
+
+
 PORT_A = 7301
 PORT_B = 7302
 DOWNLOADS_B = "/tmp/peerc_sectest_downloads_b"

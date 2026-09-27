@@ -30,6 +30,9 @@ from core.identity.device_identity import generate_keypair
 from core.security.events import SecurityEventType, SecuritySeverity
 from ui import ChatApp
 
+pytestmark = pytest.mark.ui
+
+
 
 def test_create_group_audit_event_validation():
     with pytest.raises(AuditError):

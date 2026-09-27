@@ -8,6 +8,10 @@ first-run NameSetupModal exactly once, never on later launches.
 from core.identity.identity_file import load_or_create_identity
 from core.identity.key_storage import KeyStore
 
+import pytest
+pytestmark = pytest.mark.security
+
+
 
 def _keystore(tmp_path):
     return KeyStore(plaintext_fallback_path=str(tmp_path / "key.pem"))

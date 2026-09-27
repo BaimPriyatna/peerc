@@ -22,6 +22,10 @@ from core.events import (
 from core.vault.database import VaultDatabase
 from core.vault.persistence import VaultPersistence
 
+import pytest
+pytestmark = pytest.mark.security
+
+
 
 def _make_vault(tmp_path):
     return VaultDatabase.unlock(

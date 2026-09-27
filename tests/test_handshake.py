@@ -52,6 +52,9 @@ from core.protocol.messages import (
 from core.trust.device import TrustStatus
 from core.trust.store import TrustDecision, TrustStore
 
+pytestmark = pytest.mark.security
+
+
 
 # -----------------------------------------------------------------------------
 # Unit Tests: Key Exchange & Primitives

@@ -96,6 +96,12 @@ class FileTransferSession:
         self.on_progress = on_progress
         self.on_complete = on_complete
         self.event_bus = event_bus or getattr(manager, "event_bus", None)
+        # Phase 32.1: same registry as the ConnectionManager, so an
+        # in-flight _send_chunks task can be cancelled and awaited on
+        # vault lock / app shutdown instead of running against a
+        # just-detached store. None (bare asyncio.create_task) when the
+        # manager wasn't given one either.
+        self._task_registry = getattr(manager, "_task_registry", None)
 
         os.makedirs(downloads_dir, exist_ok=True)
 
@@ -213,7 +219,13 @@ class FileTransferSession:
         if transfer is None:
             return
         transfer.status = "sending"
-        asyncio.create_task(self._send_chunks(transfer))
+        if self._task_registry is not None:
+            self._task_registry.create_task(
+                self._send_chunks(transfer), group="transfer",
+                name=f"send_chunks:{transfer.transfer_id}",
+            )
+        else:
+            asyncio.create_task(self._send_chunks(transfer))
 
     async def _handle_reject(self, addr_key: str, message: dict) -> None:
         transfer = self._outgoing.get(message["transfer_id"])

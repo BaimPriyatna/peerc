@@ -29,6 +29,9 @@ from core.identity.rotation import (
 from core.trust.device import TrustStatus
 from core.trust.store import TrustDecision, TrustStore
 
+pytestmark = pytest.mark.security
+
+
 
 # ---------------------------------------------------------------------------
 # Helpers

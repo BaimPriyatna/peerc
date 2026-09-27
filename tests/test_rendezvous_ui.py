@@ -25,6 +25,9 @@ from core.group.store import GroupStore
 from core.identity.device_identity import generate_keypair
 from ui import ChatApp
 
+pytestmark = pytest.mark.ui
+
+
 
 def _issue_cert(admin_keypair, member_keypair, group, **kwargs):
     return issue_membership_certificate(

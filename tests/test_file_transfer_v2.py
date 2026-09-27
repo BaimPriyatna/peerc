@@ -39,6 +39,9 @@ from core.transfer import (
 )
 import tempfile
 
+pytestmark = pytest.mark.integration
+
+
 
 @pytest.fixture
 def temp_dir():

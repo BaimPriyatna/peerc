@@ -1,10 +1,11 @@
 # Reliability Design: Phases 28-35
 
-Status: **in progress** — 28.1 (`1.21.0`) complete; 29/30.1 onward not yet
-implemented. This document resolves the remaining work in Phases 28-35:
-operational logging, test strategy, performance measurement, asyncio
-ownership, explicit state machines, and the encrypted application-error
-protocol.
+Status: **in progress** — 28.1 (`1.21.0`) and 29/30.1 (`1.21.1`) complete
+(29/30.1 also delivered the core of Phase 32.1's task registry, pulled
+forward at Baim's direction); 31.1 onward not yet implemented. This
+document resolves the remaining work in Phases 28-35: operational
+logging, test strategy, performance measurement, asyncio ownership,
+explicit state machines, and the encrypted application-error protocol.
 
 ## 1. Scope and Baseline
 

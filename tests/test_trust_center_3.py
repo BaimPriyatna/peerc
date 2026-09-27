@@ -24,6 +24,9 @@ from core.trust.device import TrustStatus
 from core.trust.store import TrustStore
 from ui import ChatApp, FileOfferModal, TrustPromptModal
 
+pytestmark = pytest.mark.ui
+
+
 
 def _b64(kp) -> str:
     return base64.b64encode(kp.public_key_bytes()).decode("ascii")
@@ -244,7 +247,7 @@ async def test_vault_lock_dismisses_prompt(tmp_path):
         assert len(app._trust_prompt_queue) == 1
 
         # Lock the vault
-        app._do_vault_lock()
+        await app._do_vault_lock()
         await pilot.pause()
 
         assert not isinstance(app.screen, TrustPromptModal)

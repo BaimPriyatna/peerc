@@ -26,6 +26,9 @@ from core.connectivity.locator import (
 )
 from core.connectivity.store import LocatorStore
 
+pytestmark = pytest.mark.integration
+
+
 
 # ---------------------------------------------------------------------------
 # 1-3. Endpoint / Locator (pure data)

@@ -44,6 +44,7 @@ from core.transport import (
 )
 from core.transport.timeout import ConnectionClosedError, TransportError
 from core.trust.store import TrustDecision, TrustStore
+from core.task_registry import TaskRegistry
 
 OnMessage = Callable[[str, dict], Awaitable[None]]  # (peer_addr_key, message) -> None
 
@@ -76,6 +77,7 @@ class ConnectionManager:
         max_connections: int = MAX_CONNECTIONS,
         event_bus: Optional[object] = None,
         trust_store: Optional[TrustStore] = None,
+        task_registry: Optional[TaskRegistry] = None,
     ):
         self.listen_port = listen_port
         self.my_identity = my_identity
@@ -84,6 +86,9 @@ class ConnectionManager:
         self.max_connections = max_connections
         self.event_bus = event_bus
         self.trust_store = trust_store
+        # Phase 32.1: optional — falls back to bare asyncio.create_task()
+        # so existing callers/tests that don't pass one are unaffected.
+        self._task_registry = task_registry
         self._connections: dict[str, SecureSession] = {}
         self._server: Optional[asyncio.base_events.Server] = None
         # Phase 46.1: relay-tunnel plumbing. Both dicts are keyed by the
@@ -99,6 +104,13 @@ class ConnectionManager:
         # _tunnel_r_keys: maps tunneled session addr_key -> underlying relay r_addr_key.
         # Used to unregister relay tunnel upon session teardown.
         self._tunnel_r_keys: dict[str, str] = {}
+
+    def _spawn(self, coro, *, name: str) -> asyncio.Task:
+        """Phase 32.1: tracked task creation — falls back to a bare
+        asyncio.create_task() when no registry was supplied."""
+        if self._task_registry is not None:
+            return self._task_registry.create_task(coro, group="connection", name=name)
+        return asyncio.create_task(coro)
 
     async def start_server(self) -> None:
         self._server = await asyncio.start_server(
@@ -178,7 +190,7 @@ class ConnectionManager:
         addr_key = session.addr_key
         await self._register_session(session, incoming=False)
         # Run the read loop in the background so this call returns immediately.
-        asyncio.create_task(self._read_loop(session))
+        self._spawn(self._read_loop(session), name=f"read_loop:{addr_key}")
         return addr_key
 
     async def _register_session(self, session: SecureSession, incoming: bool) -> None:
@@ -277,7 +289,10 @@ class ConnectionManager:
                                 except Exception:
                                     self.unregister_relay_tunnel(r_key)
 
-                            asyncio.create_task(_handle_incoming_relay(r_addr_key, reader))
+                            self._spawn(
+                                _handle_incoming_relay(r_addr_key, reader),
+                                name=f"relay_incoming:{r_addr_key}",
+                            )
                         # else: relay chunk with no active pipe or tunnel and limit reached — drop
                 # else: "raw" frame kind (neither JSON nor binary/relay marker) — drop.
         except (ConnectionClosedError, asyncio.IncompleteReadError, ConnectionResetError):
@@ -438,7 +453,7 @@ class ConnectionManager:
                 )
             self._tunnel_r_keys[session.addr_key] = r_addr_key
             await self._register_session(session, incoming=False)
-            asyncio.create_task(self._read_loop(session))
+            self._spawn(self._read_loop(session), name=f"read_loop:{session.addr_key}")
             return session.addr_key
         except Exception:
             self.unregister_relay_tunnel(r_addr_key)

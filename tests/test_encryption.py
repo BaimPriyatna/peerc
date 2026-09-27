@@ -14,6 +14,9 @@ from core.crypto.encryption import (
 )
 from core.crypto.kdf import SessionKeys
 
+pytestmark = pytest.mark.security
+
+
 
 def make_channel_pair():
     """Two SecureChannel instances that are each other's mirror image —

@@ -34,6 +34,9 @@ from ui import (
     _group_security_events,
 )
 
+pytestmark = pytest.mark.ui
+
+
 
 class ModalHostApp(App):
     """Minimal Textual app to host modals during pilot tests."""

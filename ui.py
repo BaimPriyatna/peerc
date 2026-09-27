@@ -81,6 +81,7 @@ from core.trust.store import TrustStore
 from core.trust.device import TrustedDevice, TrustStatus
 from core.trust.revocation import revoke_device, RevocationError
 from core.logging_setup import configure_logging
+from core.task_registry import TaskRegistry
 from core.identity.fingerprint import format_fingerprint, short_fingerprint
 from core.group import (
     AdminStatus,
@@ -1408,6 +1409,11 @@ class ChatApp(App):
         # ChatApp() is constructed directly (e.g. tests, no CLI parsing).
         self._diagnostic_mode: bool = False
 
+        # Phase 32.1: one registry per ChatApp instance — passed down to
+        # ConnectionManager/ChatSession/FileTransferSession on_mount, and
+        # used directly for the three app-owned background loops.
+        self._task_registry: TaskRegistry = TaskRegistry()
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="main"):
@@ -1500,6 +1506,7 @@ class ChatApp(App):
             my_name=self.display_name,
             event_bus=self.event_bus,
             trust_store=self.trust_store,
+            task_registry=self._task_registry,
         )
         self.chat_session = chat.ChatSession(
             self.manager,
@@ -1531,9 +1538,9 @@ class ChatApp(App):
             self.peer_id, self.display_name, UI_TCP_PORT, self.registry,
             public_key=self.public_key_bytes, model=self.device_model,
         )
-        asyncio.create_task(self._discovery.run())
-        asyncio.create_task(self._prune_ui_loop())
-        asyncio.create_task(self._auto_lock_loop())
+        self._task_registry.create_task(self._discovery.run(), group="app", name="discovery")
+        self._task_registry.create_task(self._prune_ui_loop(), group="app", name="prune_ui_loop")
+        self._task_registry.create_task(self._auto_lock_loop(), group="app", name="auto_lock_loop")
 
         # Phase 45.1: baseline for own-IP-change detection (§7 "IP
         # Change Problem"). In-memory only, same reasoning as
@@ -1600,7 +1607,11 @@ class ChatApp(App):
             except RecoveryCodeError:
                 error = "That doesn't look like a valid recovery code — try again."
 
-    def on_unmount(self) -> None:
+    async def on_unmount(self) -> None:
+        # Phase 32.1: bounded shutdown — cancel and await every group
+        # (connection, transfer, app) before touching any store below, so
+        # nothing still-running can observe a half-torn-down app.
+        await self._task_registry.cancel_all()
         if self._security_event_listener_registered:
             remove_security_event_listener(self._on_security_event_buffered)
             self._security_event_listener_registered = False
@@ -3113,9 +3124,20 @@ class ChatApp(App):
             self.call_after_refresh(self._dequeue_next_trust_prompt)
         return ret
 
-    def _perform_hard_lock(self) -> None:
+    async def _perform_hard_lock(self) -> None:
         """Detach dependents, wipe DEK, flush+destroy the working copy.
-        Does not show the unlock modal — caller handles that."""
+        Does not show the unlock modal — caller handles that.
+
+        Phase 32.1: also cancels and awaits every in-flight "transfer"
+        task first — a _send_chunks() task still running against a
+        just-detached (None) store was the concrete gap that pulled the
+        task registry forward from Phase 32.1 into 29/30.1. Connection
+        read-loops are deliberately left running: an active peer
+        connection doesn't itself touch vault-scoped stores, and tearing
+        it down on every lock would be a bigger behavior change than the
+        gap that was found.
+        """
+        await self._task_registry.cancel_group("transfer")
         self._trust_prompt_queue.clear()
         if hasattr(self, "screen") and isinstance(self.screen, TrustPromptModal):
             self.pop_screen()
@@ -3139,13 +3161,13 @@ class ChatApp(App):
             self.vault_session.lock()
         self.vault_db = None
 
-    def _do_vault_lock(self) -> None:
+    async def _do_vault_lock(self) -> None:
         """Phase 37.1: Vault lock entrypoint."""
-        self._perform_hard_lock()
+        await self._perform_hard_lock()
 
-    def _hard_lock(self) -> None:
+    async def _hard_lock(self) -> None:
         """Phase 37.1: Alias for _perform_hard_lock."""
-        self._perform_hard_lock()
+        await self._perform_hard_lock()
 
     @work
     async def action_lock_vault(self) -> None:
@@ -3270,7 +3292,7 @@ class ChatApp(App):
             # Already locked — just make sure the unlock modal is up.
             await self._reunlock_vault()
             return
-        self._perform_hard_lock()
+        await self._perform_hard_lock()
         self._log(f"[yellow]Vault {reason}. Enter passphrase to continue.[/yellow]")
         await self._reunlock_vault()
 
@@ -3312,9 +3334,10 @@ class ChatApp(App):
             if self.vault_session is None or not self.vault_session.is_unlocked:
                 continue
             if self.vault_session.idle_expired():
-                # Hard-lock synchronously so the next poll doesn't
-                # re-fire; the @work helper only owns the unlock modal.
-                self._perform_hard_lock()
+                # Hard-lock (and await transfer-task cleanup) so the next
+                # poll doesn't re-fire; the @work helper only owns the
+                # unlock modal.
+                await self._perform_hard_lock()
                 self._log(
                     "[yellow]Vault auto-locked after idle timeout. "
                     "Enter passphrase to continue.[/yellow]"
@@ -4452,7 +4475,9 @@ class ChatApp(App):
             self._log("[bold yellow]╚═══════════════════════════════════════════════════╝[/bold yellow]")
 
         elif cmd == "/lock":
-            self.action_lock_vault()
+            # Phase 29/30.1: was a bare (unawaited) call — action_lock_vault
+            # is a coroutine function, so /lock silently did nothing.
+            await self.action_lock_vault()
 
         elif cmd == "/autolock":
             if self.vault_session is None or not self.vault_session.is_unlocked:

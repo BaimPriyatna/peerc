@@ -53,6 +53,9 @@ from core.protocol.messages import (
 )
 from core.protocol.errors import ProtocolError
 
+pytestmark = pytest.mark.integration
+
+
 
 # ---------------------------------------------------------------------------
 # Fixtures

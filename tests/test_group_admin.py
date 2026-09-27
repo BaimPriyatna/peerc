@@ -32,6 +32,9 @@ from core.group.policy import GroupPolicy
 from core.group.store import AdminStatus, GroupStore, GroupStoreError
 from core.identity.device_identity import generate_keypair
 
+pytestmark = pytest.mark.integration
+
+
 
 # ---------------------------------------------------------------------------
 # 1-3. ThresholdApproval (pure crypto/data, no storage)

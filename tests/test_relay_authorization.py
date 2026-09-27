@@ -29,6 +29,9 @@ from core.identity.device_identity import generate_keypair
 from core.protocol.errors import ProtocolError
 from core.protocol.messages import make_relay_request, make_relay_response, validate_message
 
+pytestmark = pytest.mark.security
+
+
 
 # ---------------------------------------------------------------------------
 # Fixtures

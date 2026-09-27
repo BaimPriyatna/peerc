@@ -28,6 +28,9 @@ from core.vault.database import (
 )
 from core.vault.migration import migrate_plaintext_trust_db
 
+pytestmark = pytest.mark.security
+
+
 
 def test_unlock_fresh_creates_all_tables(tmp_path):
     dek = os.urandom(32)

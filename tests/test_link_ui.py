@@ -18,6 +18,9 @@ from core.connectivity.store import LocatorStore
 from core.identity.device_identity import generate_keypair
 from ui import LinkAddModal, LinkGenerateModal, LinkMenuModal, LinkResultModal, UI_TCP_PORT, ChatApp, _parse_endpoint_line
 
+pytestmark = pytest.mark.ui
+
+
 
 # ---------------------------------------------------------------------------
 # _parse_endpoint_line (pure function)

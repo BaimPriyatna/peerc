@@ -28,6 +28,9 @@ from core.trust.device import TrustStatus
 from core.trust.store import TrustDecision, TrustStore
 from core.vault.database import VaultDatabase
 
+pytestmark = pytest.mark.security
+
+
 
 # ---------------------------------------------------------------------------
 # 1. Standalone & unrestricted group behavior

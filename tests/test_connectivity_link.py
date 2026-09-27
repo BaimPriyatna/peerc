@@ -36,6 +36,9 @@ from core.connectivity.link import (
 from core.connectivity.locator import KIND_DIRECT_V4, KIND_DIRECT_V6, KIND_RENDEZVOUS, Endpoint
 from core.identity.device_identity import generate_keypair
 
+pytestmark = pytest.mark.integration
+
+
 PIN = "482913"
 
 

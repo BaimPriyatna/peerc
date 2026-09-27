@@ -28,6 +28,9 @@ from core.connectivity.locator import KIND_DIRECT_V4, KIND_RENDEZVOUS
 from core.crypto.handshake import NonceCache
 from core.identity.device_identity import generate_keypair
 
+pytestmark = pytest.mark.integration
+
+
 
 # ---------------------------------------------------------------------------
 # 1. Validation

@@ -38,6 +38,9 @@ from core.vault.recovery_code import (
     normalize_recovery_code,
 )
 
+pytestmark = pytest.mark.security
+
+
 
 def test_create_and_unlock_with_passphrase(tmp_path):
     path = str(tmp_path / "vault_keyfile.json")

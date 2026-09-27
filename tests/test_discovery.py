@@ -51,6 +51,9 @@ from discovery import (
     get_network_info,
 )
 
+pytestmark = pytest.mark.integration
+
+
 
 # ---------------------------------------------------------------------------
 # Helpers

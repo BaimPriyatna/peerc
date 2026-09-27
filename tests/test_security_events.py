@@ -49,6 +49,9 @@ from core.security import (
 from core.trust.device import TrustStatus
 from core.trust.store import TrustDecision, TrustStore
 
+pytestmark = pytest.mark.security
+
+
 
 # ---------------------------------------------------------------------------
 # 1. Severity enum and ordering

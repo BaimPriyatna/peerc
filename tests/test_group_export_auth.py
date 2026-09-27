@@ -21,6 +21,9 @@ from core.group.membership import Group
 from core.group.policy import ExportDeniedError, PolicyEnforcer
 from core.group.store import AdminStatus, GroupStore
 
+pytestmark = pytest.mark.integration
+
+
 
 # ---------------------------------------------------------------------------
 # Helpers

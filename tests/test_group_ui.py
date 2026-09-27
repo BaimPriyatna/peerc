@@ -22,6 +22,9 @@ from core.identity.device_identity import generate_keypair
 import protocol
 from ui import ChatApp
 
+pytestmark = pytest.mark.ui
+
+
 
 @pytest.fixture
 def test_app(tmp_path):

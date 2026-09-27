@@ -9,6 +9,10 @@ from core.connectivity.locator import KIND_DIRECT_V4, Endpoint
 from core.connectivity.store import LocatorStore
 from core.vault.database import VaultDatabase
 
+import pytest
+pytestmark = pytest.mark.security
+
+
 
 def test_locator_store_shares_vault_connection(tmp_path):
     vault_db_path = str(tmp_path / "vault.db")

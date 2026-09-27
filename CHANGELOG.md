@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.21.1] — Phase 29/30.1: Reliability taxonomy + task ownership (pulled forward)
+
+### Added
+- **Pytest markers** (`pyproject.toml`): registered `unit`, `integration`, `ui`, `security`, `benchmark` (reserved for Phase 31+); applied `pytestmark` to all 52 existing test files by actual content (real-socket/two-peer tests → `integration`, crypto/handshake/trust/vault/group-policy/relay-authorization → `security`, anything driving `ChatApp` → `ui`, the rest → `unit`). Flat `tests/` layout unchanged, per RELIABILITY_DESIGN.md §3.
+- **`core/task_registry.py`** [NEW] — `TaskRegistry`: bounded, per-owner task tracking by group (`connection`/`transfer`/`app`), `create_task()`, `active_count()`, `groups()`, `cancel_group()`/`cancel_all()` (cancel + await, not fire-and-forget). Not a global task supervisor — each `ChatApp` owns exactly one instance, passed down to `ConnectionManager`/`ChatSession`/`FileTransferSession`.
+  - **Pulled forward from Phase 32.1** at Baim's explicit direction, to fully close a gap found while writing the "task cleanup after vault lock" reliability case: `_perform_hard_lock()` didn't cancel in-flight transfer tasks, which could then touch a just-detached (`None`) store.
+  - `peer.py`/`chat.py`/`file_transfer.py`: `ConnectionManager`/`ChatSession`/`FileTransferSession` all take an optional registry (falls back to bare `asyncio.create_task()` when none is supplied, so existing direct-construction tests are unaffected); read-loop, relay-incoming, chat-ack-timeout, and `_send_chunks` tasks now flow through it.
+  - `ui.py`: `_perform_hard_lock()` is now `async` and cancels+awaits the `"transfer"` group first (the concrete fix); `on_unmount()` is now `async` and cancels+awaits every group (full bounded shutdown). Connection tasks are deliberately left running on vault lock (see the method's docstring) — only on app shutdown are all three groups torn down.
+  - Incidental fix found in the same code path: `/lock` called `action_lock_vault()` (a coroutine function) without `await`, so the command silently did nothing.
+- **Required reliability cases** (`tests/test_reliability_cases.py`, `tests/test_task_registry.py`): cancellation at await points (`connect_to`, `_send_chunks`), duplicate/late `chat_ack` are no-ops, peer disconnect mid-transfer resolves without hanging or raising, and the task-cleanup fix above — all tested against the real live code paths.
+  - **Deferred** (documented in the test file's module docstring, not weak stand-ins): "no event-loop stall above a budget" (Phase 31.1, no budget chosen yet), "an invalid state transition never sends a frame" (Phase 33.1/34.1, no formal state machine yet), and "error responses contain no peer-internal exception text" (Phase 35, no wire-level error-response mechanism exists yet to test against).
+- **Test Coverage**: `tests/test_task_registry.py`: 7 tests; `tests/test_reliability_cases.py`: 8 tests. Full suite: 569 passed, 1 skipped.
+
 ## [1.21.0] — Phase 28.1: Operational logging foundation
 
 ### Added

@@ -46,6 +46,11 @@ class ChatSession:
         self.on_chat_received = on_chat_received
         self.on_status_change = on_status_change
         self.event_bus = event_bus or getattr(manager, "event_bus", None)
+        # Phase 32.1: same registry as the ConnectionManager, so a
+        # message's ack-timeout watcher is cancelled/awaited alongside its
+        # connection's other tasks. None (bare asyncio.create_task) when
+        # the manager wasn't given one either.
+        self._task_registry = getattr(manager, "_task_registry", None)
         self._pending: dict[str, SentMessageState] = {}
 
         if self.event_bus:
@@ -183,7 +188,13 @@ class ChatSession:
             # awaiting) — nothing left to time out.
             return message_id
 
-        state.timeout_task = asyncio.create_task(self._timeout_watcher(message_id))
+        if self._task_registry is not None:
+            state.timeout_task = self._task_registry.create_task(
+                self._timeout_watcher(message_id), group="connection",
+                name=f"chat_ack_timeout:{message_id}",
+            )
+        else:
+            state.timeout_task = asyncio.create_task(self._timeout_watcher(message_id))
         return message_id
 
     def get_status(self, message_id: str) -> Optional[str]:

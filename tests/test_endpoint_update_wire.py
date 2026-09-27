@@ -30,6 +30,9 @@ from core.protocol.errors import ProtocolError
 from peer import ConnectionManager
 from ui import ChatApp
 
+pytestmark = pytest.mark.ui
+
+
 PORT_A = 7401
 PORT_B = 7402
 

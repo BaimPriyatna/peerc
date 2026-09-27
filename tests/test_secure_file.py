@@ -31,6 +31,9 @@ from core.vault.secure_file import (
     load_metadata,
 )
 
+pytestmark = pytest.mark.security
+
+
 
 def test_encrypt_decrypt_roundtrip(tmp_path):
     """Encrypt a file, decrypt it back, verify plaintext matches."""

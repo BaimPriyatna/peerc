@@ -37,6 +37,9 @@ from core.vault import (
 )
 from core.events import EventBus, ChatMessageSent
 
+pytestmark = pytest.mark.security
+
+
 
 class FakeClock:
     def __init__(self, start: float = 1000.0):

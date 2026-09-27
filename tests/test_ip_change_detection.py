@@ -22,6 +22,9 @@ from core.identity.device_identity import generate_keypair
 from peer import ConnectionManager
 from ui import ChatApp
 
+pytestmark = pytest.mark.ui
+
+
 PORT_A = 7501
 PORT_B = 7502
 

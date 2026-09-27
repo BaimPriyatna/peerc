@@ -12,6 +12,10 @@ from core.identity.device_identity import generate_keypair
 from core.transport.timeout import ConnectTimeoutError
 from peer import ConnectionManager
 
+import pytest
+pytestmark = pytest.mark.integration
+
+
 PORT_A = 7401
 PORT_B = 7402
 

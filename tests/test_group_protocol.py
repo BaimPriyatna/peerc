@@ -26,6 +26,9 @@ from core.group.store import GroupStore, GroupStoreError, MembershipStatus
 from core.identity.device_identity import generate_keypair
 from core.protocol import ProtocolError, validate_message
 
+pytestmark = pytest.mark.integration
+
+
 
 def _setup_group(tmp_path):
     store = GroupStore(db_path=str(tmp_path / "group.db"))

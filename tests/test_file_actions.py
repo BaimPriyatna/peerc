@@ -39,6 +39,9 @@ from core.vault.file_actions import (
 )
 from core.vault.secure_file import encrypt_file, list_secure_files
 
+pytestmark = pytest.mark.unit
+
+
 
 @pytest.fixture
 def vault_session(tmp_path):

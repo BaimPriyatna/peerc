@@ -24,6 +24,9 @@ from core.trust.revocation import revoke_device
 from core.trust.store import TrustStore
 from ui import ChatApp, TrustCenterModal, TrustDeviceDetailModal
 
+pytestmark = pytest.mark.ui
+
+
 
 class ModalHostApp(App):
     """Minimal Textual app to host modals during pilot tests."""

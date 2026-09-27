@@ -44,6 +44,9 @@ import file_transfer
 from core.identity.device_identity import generate_keypair
 from peer import ConnectionManager
 
+pytestmark = pytest.mark.integration
+
+
 
 @pytest.mark.asyncio
 async def test_event_bus_sync_and_async_dispatch():

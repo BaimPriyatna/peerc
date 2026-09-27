@@ -37,6 +37,9 @@ from core.trust.store import TrustDecision, TrustStore
 from peer import ConnectionManager
 from ui import ChatApp, TrustPromptModal
 
+pytestmark = pytest.mark.ui
+
+
 
 def _pub_hex(kp) -> str:
     return kp.public_key_bytes().hex()

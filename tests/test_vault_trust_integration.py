@@ -16,6 +16,10 @@ import os
 from core.trust.store import TrustDecision, TrustStore
 from core.vault.database import VaultDatabase
 
+import pytest
+pytestmark = pytest.mark.security
+
+
 
 def test_trust_store_shares_vault_connection(tmp_path):
     vault_db_path = str(tmp_path / "vault.db")

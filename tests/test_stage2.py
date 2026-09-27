@@ -12,6 +12,10 @@ import protocol
 from core.identity.device_identity import generate_keypair
 from peer import ConnectionManager
 
+import pytest
+pytestmark = pytest.mark.integration
+
+
 PORT_A = 7001
 PORT_B = 7002
 

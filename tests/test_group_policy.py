@@ -33,6 +33,9 @@ from core.group.store import GroupStore, GroupStoreError
 from core.identity.device_identity import generate_keypair
 from core.security import SecurityEventType, capture_security_events
 
+pytestmark = pytest.mark.security
+
+
 
 # ---------------------------------------------------------------------------
 # 1. Schema, serialization, canonical payload

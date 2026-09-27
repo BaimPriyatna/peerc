@@ -25,6 +25,9 @@ from core.logging_setup import (
     is_configured,
 )
 
+pytestmark = pytest.mark.unit
+
+
 
 @pytest.fixture(autouse=True)
 def _reset_peerc_logger():

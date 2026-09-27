@@ -139,6 +139,7 @@ endpoint_update.py` for the shape to copy.
 | `1.20.3` | 37.2 | Phase 37.2: Security Events view (`SecurityEventsModal`, grouped by type+device, links to device detail) and read-only rotation-chain history in `TrustDeviceDetailModal` (tainted-chain highlighting on a revoked ancestor); `/events` command |
 | `1.20.4` | 37.3 | Phase 37.3: Full workflow verification — end-to-end pilot tests chaining pending→approve→trusted and pending→reject→revoked reconnects, plus policy-denial-in-prompt. **Phase 37 complete** |
 | `1.21.0` | 28.1 | Phase 28.1: Logging foundation — `core/logging_setup.py` [NEW]: single startup `configure_logging()` for the `peerc` logger tree, rotating file handler at `~/.peerc/diagnostics.log`, `WARNING`/`INFO`/`DEBUG` policy via `--diagnostic`/`--debug` CLI flags, redacting filter for forbidden structured fields, no propagation to the UI or library root logger. `discovery.py`'s logger renamed to `peerc.discovery`. Begins Phase 28-35 (Reliability program) |
+| `1.21.1` | 29/30.1 | Phase 29/30.1: Reliability taxonomy — pytest markers (`unit`/`integration`/`ui`/`security`/`benchmark`) applied to all 52 test files; `core/task_registry.py` [NEW] `TaskRegistry` (Phase 32.1 pulled forward at Baim's direction) wired into `ConnectionManager`/`ChatSession`/`FileTransferSession`/`ChatApp`; `_perform_hard_lock()`/`on_unmount()` now cancel+await in-flight tasks (the concrete gap this closed); `/lock` missing-`await` bug fixed; 4 of 7 required reliability cases covered (cancellation, duplicate/late ack, peer disconnect mid-transfer, task cleanup), 3 explicitly deferred to Phase 31.1/33-34/35 |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -324,7 +325,9 @@ numeric phase order in the plan doc:
    37.1 `1.20.2`, 37.2 `1.20.3`, 37.3 `1.20.4`)
 4. **Phase 28-35 — logging, performance, concurrency, state machines,
    error protocol** (design resolved in `RELIABILITY_DESIGN.md`; in
-   progress: 28.1 `1.21.0` complete; next: 29/30.1 reliability taxonomy) <- next
+   progress: 28.1 `1.21.0`, 29/30.1 `1.21.1` complete — the latter also
+   delivered the core of Phase 32.1's task registry, pulled forward;
+   next: 31.1 Baselines) <- next
 5. Phase 38 — Project structure final (design resolved in
    `PROJECT_STRUCTURE_DESIGN.md`; deferred until Phase 36/37 and 28-35
    stabilize)

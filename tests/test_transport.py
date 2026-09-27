@@ -34,6 +34,9 @@ from core.transport import (
 )
 from core.trust.store import TrustStore
 
+pytestmark = pytest.mark.security
+
+
 
 def _make_dummy_channels():
     key_a = os.urandom(32)

@@ -25,6 +25,9 @@ from core.vault.executable_detection import (
     is_executable,
 )
 
+pytestmark = pytest.mark.unit
+
+
 
 def test_windows_pe_executable_detected(tmp_path):
     """Windows PE executable (MZ header) must be detected."""

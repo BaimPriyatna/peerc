@@ -26,6 +26,9 @@ from core.transport import EncryptedTransport, RelayedStreamReader, RelayedStrea
 from peer import ConnectionManager
 import protocol
 
+pytestmark = pytest.mark.integration
+
+
 PORT_R = 7601
 PORT_A = 7602
 PORT_B = 7603

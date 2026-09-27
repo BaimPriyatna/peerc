@@ -27,6 +27,10 @@ from core.vault.crypto import new_dek
 from core.vault.database import VaultDatabase
 from ui import ChatApp
 
+import pytest
+pytestmark = pytest.mark.ui
+
+
 
 async def main() -> None:
     tmpdir = tempfile.mkdtemp(prefix="peerc_stage5_")

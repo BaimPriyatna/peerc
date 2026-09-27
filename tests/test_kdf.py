@@ -30,6 +30,9 @@ from core.crypto import (
 from core.identity.device_identity import DeviceKeypair
 from core.trust.store import TrustStore
 
+pytestmark = pytest.mark.security
+
+
 
 def test_derive_session_keys_determinism():
     shared_secret = secrets.token_bytes(32)

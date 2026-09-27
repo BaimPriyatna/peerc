@@ -8,6 +8,10 @@ than asserting an exact string for every possible host OS.
 
 import core.device_info as device_info
 
+import pytest
+pytestmark = pytest.mark.unit
+
+
 
 def test_detect_device_model_returns_non_empty_string():
     result = device_info.detect_device_model()

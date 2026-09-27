@@ -29,6 +29,9 @@ from core.group.membership import (
 )
 from core.group.store import GroupStore, GroupStoreError, MembershipStatus
 
+pytestmark = pytest.mark.integration
+
+
 
 # ---------------------------------------------------------------------------
 # Helpers
