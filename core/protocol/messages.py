@@ -14,13 +14,15 @@ Message types:
     file_done         - signals file transfer complete + checksum (Stage 4)
     file_complete_ack - receiver confirms verification succeeded (BUG-012)
     hello / hello_ack - peer handshake
-    error             - generic error report
+    error             - post-handshake application error (closed code set,
+                        allowlisted context; see error_codes.py)
 """
 
 import time
 import uuid
 
 from .errors import ProtocolError
+from .error_codes import build_error, parse_error_message
 
 MAX_CHAT_TEXT_SIZE = 64 * 1024  # 64 KB — a chat message is not a file (BUG-021)
 
@@ -132,8 +134,12 @@ def make_file_complete_ack(transfer_id: str, success: bool, detail: str = "") ->
     }
 
 
-def make_error(code: str, message: str) -> dict:
-    return {"type": "error", "version": PROTOCOL_VERSION, "code": code, "message": message}
+def make_error(code, message=None, context=None) -> dict:
+    """Build a wire-ready `error` (Phase 35.1). `code` is an ErrorCode or its
+    name; an unknown code raises ValueError. `message` defaults to the
+    code's canonical plain-language text, and is replaced by it if it looks
+    unsafe; `context` is filtered to the allowlist. See error_codes.py."""
+    return build_error(code, message=message, context=context, version=PROTOCOL_VERSION)
 
 
 def make_hello(peer_id: str, sender_name: str, tcp_port: int) -> dict:
@@ -642,6 +648,9 @@ def validate_message(message) -> dict:
     missing = [f for f in required if f not in message]
     if missing:
         raise ProtocolError(f"'{msg_type}' message missing fields: {missing}")
+
+    if msg_type == "error":
+        parse_error_message(message)  # raises ProtocolError if malformed
 
     if msg_type == "chat":
         if not isinstance(message["text"], str):

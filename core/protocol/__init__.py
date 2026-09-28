@@ -23,6 +23,14 @@ from .frame import (
     write_binary_frame,
     write_frame,
 )
+from .error_codes import (
+    CONTRACTS as ERROR_CONTRACTS,
+    ErrorCode,
+    ErrorContract,
+    ErrorInfo,
+    build_error,
+    parse_error_message,
+)
 from .messages import (
     MAX_CHAT_TEXT_SIZE,
     MIN_SUPPORTED_VERSION,
@@ -63,6 +71,12 @@ from .messages import (
 
 __all__ = [
     "ProtocolError",
+    "ERROR_CONTRACTS",
+    "ErrorCode",
+    "ErrorContract",
+    "ErrorInfo",
+    "build_error",
+    "parse_error_message",
     "BINARY_FLAG",
     "LENGTH_PREFIX_FORMAT",
     "LENGTH_PREFIX_SIZE",

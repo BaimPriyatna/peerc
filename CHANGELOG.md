@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.21.5] — Phase 35.1: Application error schema
+
+### Added
+- **`core/protocol/error_codes.py`** [NEW] per RELIABILITY_DESIGN.md §7: the closed 12-code `ErrorCode` set and an `ErrorContract` for each (canonical plain-language text, whether the UI may offer a retry action, whether the code marks a correlated operation terminal, and a retry hint). Only `INVALID_STATE` and `RATE_LIMITED` are non-terminal; only `INVALID_STATE`, `DISK_FULL`, `TRANSFER_EXPIRED` and `RATE_LIMITED` allow a retry action. A module-level assert fails at import if a code is added without a contract.
+- **Safe `context`**: allowlisted to `message_id`/`transfer_id`/`group_id` (each must look like a plain identifier: 1-128 chars of `A-Za-z0-9_.:-`) and a bounded numeric `retry_after` (0 < n <= 3600 seconds). Anything else — a traceback, local path, peer address, key material, raw exception text, or any unknown key — is dropped. `filter_context()` never raises, since it runs on both the sending side (a caller's bug must not leak) and the receiving side (the payload is untrusted).
+- **Sender**: `build_error()` (and `protocol.make_error()`, now routed through it, with `message`/`context` optional) uses the code's canonical text by default; a custom `message` that looks like a traceback, path, IP address, long hex/base64 run, or raw exception text — or contains control characters or exceeds 200 characters — is replaced by the canonical text. An unknown code is a programming error and raises `ValueError`; a bad `message`/`context` never raises, because this runs in failure paths.
+- **Receiver**: `parse_error_message()` validates the schema strictly (`ProtocolError`, never `KeyError`/`TypeError`) and returns a sanitized `ErrorInfo`. An unknown `code` is *not* malformed — a newer peer may have added one — it is displayed as `INTERNAL_ERROR` and its raw value kept for a sanitized log line. **The receiver never displays the peer's `message`**: `display_text` comes from the local contract, so a hostile peer can't put its own words (or terminal escape sequences) in front of the user; the peer's text is only kept, defanged and truncated, for logs. `validate_message()` now enforces this parser for `error`.
+- **Scoping note**: this sub-step is schema only. Nothing sends or handles `error` yet — that is 35.2, which will add errors only where an existing negative response (`file_reject`, `file_complete_ack(success=false)`, `relay_response(accepted=false)`) doesn't already cover the outcome.
+- **Test Coverage**: `tests/test_error_schema.py` (63, marker `security`): the code set, contracts, context filtering (including bad ids and out-of-range/NaN/bool `retry_after`), unsafe-message fallback, strict parsing of malformed input, unknown codes, the local-text-only display rule, and log sanitizing.
+- **Full suite**: 679 passed, 1 skipped, 7 deselected (was 616).
+
 ## [1.21.4] — Phase 34.1: Transfer lifecycle FSMs
 
 ### Added
