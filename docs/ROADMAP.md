@@ -142,6 +142,7 @@ endpoint_update.py` for the shape to copy.
 | `1.21.1` | 29/30.1 | Phase 29/30.1: Reliability taxonomy — pytest markers (`unit`/`integration`/`ui`/`security`/`benchmark`) applied to all 52 test files; `core/task_registry.py` [NEW] `TaskRegistry` (Phase 32.1 pulled forward at Baim's direction) wired into `ConnectionManager`/`ChatSession`/`FileTransferSession`/`ChatApp`; `_perform_hard_lock()`/`on_unmount()` now cancel+await in-flight tasks (the concrete gap this closed); `/lock` missing-`await` bug fixed; 4 of 7 required reliability cases covered (cancellation, duplicate/late ack, peer disconnect mid-transfer, task cleanup), 3 explicitly deferred to Phase 31.1/33-34/35 |
 | `1.21.2` | 31.1 | Phase 31.1: Performance baselines — `core/benchmarking.py` [NEW] (`EventLoopLagSampler`, `peak_rss_mb()`, `record_metric()`); `tests/test_benchmarks.py` [NEW] (marker `benchmark`, non-gating) records all 5 §4 metrics into `docs/benchmarks/baseline.json`. `pyproject.toml` excludes `benchmark` from a plain `pytest` run by default. Fixed a real CI gap found along the way: `.github/workflows/tests.yml`'s `test` job only ran 8 hardcoded files, never the full suite — now runs plain `pytest` (full 569), plus a separate non-gating `benchmark` job |
 | `1.21.3` | 33.1 | Phase 33.1: Connection lifecycle FSM — `core/connection_state.py` [NEW] `ConnectionState`/`ConnectionStateMachine` (§6.1's 7-state table, idempotent CLOSING/CLOSED, `require_established()` guard); wired into `peer.py`'s `ConnectionManager` (`_register_session`, `_read_loop`, `send*()`, `close_all()`, `get_connection_state()`). Also closed the deferred Phase 32.1 gap: `TaskRegistry.cancel_group()`/`cancel_all()` now bound their wait (default 5s) and log a sanitized warning on a deadline miss |
+| `1.21.4` | 34.1 | Phase 34.1: Transfer lifecycle FSMs — `core/transfer_state.py` [NEW] `OutgoingTransferStateMachine`/`IncomingTransferStateMachine` (§6.2 tables, idempotent terminal states); replaces `file_transfer.py`'s write-only `status: str` on `OutgoingTransfer`/`IncomingTransfer` with guarded `transition_to()`. New protection: a duplicate `file_accept` no longer spawns a second `_send_chunks` task, a duplicate/late `file_complete_ack` and a chunk after a terminal/paused state are dropped. PAUSED/RESUMING modeled but not yet driven (no resume feature wired into the live path). `core/transfer/{sender,receiver,manager}.py` left untouched — production never uses them |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -329,8 +330,8 @@ numeric phase order in the plan doc:
    error protocol** (design resolved in `RELIABILITY_DESIGN.md`; in
    progress: 28.1 `1.21.0`, 29/30.1 `1.21.1`, 31.1 `1.21.2`, 33.1
    `1.21.3` complete — Phase 32.1 (task registry + bounded-wait/warning)
-   is now fully done, folded into 29/30.1 and 33.1; next: 34.1 Transfer
-   FSM) <- next
+   is now fully done, folded into 29/30.1 and 33.1; 34.1 `1.21.4`
+   Transfer FSM complete; next: 35.1/35.2 Application Error Protocol) <- next
 5. Phase 38 — Project structure final (design resolved in
    `PROJECT_STRUCTURE_DESIGN.md`; deferred until Phase 36/37 and 28-35
    stabilize)

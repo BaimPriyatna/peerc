@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.21.4] — Phase 34.1: Transfer lifecycle FSMs
+
+### Added
+- **`core/transfer_state.py`** [NEW]: `OutgoingTransferStateMachine` (`OFFERED → WAITING_FOR_ACCEPT → SENDING → WAITING_FOR_COMPLETE_ACK → COMPLETED`, plus `FAILED`/`REJECTED`/`CANCELLED`) and `IncomingTransferStateMachine` (`OFFERED → ACCEPTED → RECEIVING → VERIFYING → COMPLETED`, plus `REJECTED`/`CANCELLED`/`FAILED`/`EXPIRED` and the `PAUSED → RESUMING → RECEIVING` cycle) per RELIABILITY_DESIGN.md §6.2. `transition_to()` is the only mutator; illegal transitions raise `InvalidTransferTransition`; terminal states are idempotent. `RECEIVING → RECEIVING` is allowed so each further chunk doesn't raise.
+- **`file_transfer.py`**: `OutgoingTransfer`/`IncomingTransfer` replace their `status: str` field — which every one of its 9 assignments only ever *wrote* and nothing ever read, so there was no protection at all — with a `state` machine. New behavior this buys: a duplicate `file_accept` no longer re-runs `_handle_accept` and spawns a second `_send_chunks` task (found while writing the 29/30.1 reliability tests); a `file_reject` after the transfer already resolved, a duplicate/late `file_complete_ack`, and a chunk arriving after a terminal or paused state are all dropped rather than acted on. A zero-byte file (no chunks, so still `ACCEPTED` when `file_done` arrives) steps through `RECEIVING` to `VERIFYING` so the table stays strict.
+- **Scoping notes**: `PAUSED`/`RESUMING` are modeled per the diagram but nothing drives them yet — no pause/resume feature is wired into the live transfer path (`core/transfer/resume.py` exists but is unused there). `CANCELLED`/`REJECTED`(incoming)/`EXPIRED` are likewise legal-but-currently-untriggered targets. `core/transfer/{sender,receiver,manager}.py` (`FileSender`/`FileReceiver`/`TransferManager`) were deliberately not touched: `ui.py` and `file_transfer.py` never use them (only the chunker/hashing/disk-space/path-safety helpers), so adding state guards there would change nothing in production.
+- **Test Coverage**: `tests/test_transfer_fsm.py` (20, unit): both tables — happy paths, illegal skips, duplicate accept, chunk after terminal, resume cycle, idempotent terminals. `tests/test_transfer_fsm_integration.py` (7, integration): a real transfer reaches `COMPLETED` on both sides, duplicate accept doesn't spawn a second send task, reject lands in `REJECTED`, zero-byte file completes, late/duplicate complete-ack dropped, chunk after `FAILED`/`PAUSED` dropped.
+- **Full suite**: 616 passed, 1 skipped, 7 deselected (was 589 before this sub-step).
+
 ## [1.21.3] — Phase 33.1: Connection lifecycle FSM (+ closed deferred Phase 32.1 gap)
 
 ### Added

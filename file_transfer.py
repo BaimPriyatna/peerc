@@ -37,6 +37,13 @@ from core.transfer import (
     sha256_file,
 )
 from peer import ConnectionManager
+from core.transfer_state import (
+    IncomingTransferState,
+    IncomingTransferStateMachine,
+    InvalidTransferTransition,
+    OutgoingTransferState,
+    OutgoingTransferStateMachine,
+)
 
 CHUNK_SIZE = DEFAULT_CHUNK_SIZE  # 64 KB per chunk
 
@@ -59,7 +66,11 @@ class OutgoingTransfer:
     filename: str
     size: int
     checksum: str
-    status: str = "offered"  # offered -> accepted/rejected -> sending -> awaiting_ack -> done/failed
+    # Phase 34.1: guarded state machine (OFFERED -> WAITING_FOR_ACCEPT ->
+    # SENDING -> WAITING_FOR_COMPLETE_ACK -> COMPLETED/FAILED/REJECTED/
+    # CANCELLED) replaces what used to be a free-form status string
+    # nothing ever read back — see RELIABILITY_DESIGN.md §6.2.
+    state: OutgoingTransferStateMachine = field(default_factory=OutgoingTransferStateMachine, repr=False)
     _ack_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     _ack_success: bool = field(default=False, repr=False)
 
@@ -76,7 +87,10 @@ class IncomingTransfer:
     part_path: str = ""
     bytes_received: int = 0
     expected_chunk_index: int = 0
-    status: str = "offered"
+    # Phase 34.1: guarded state machine (OFFERED -> ACCEPTED -> RECEIVING
+    # -> VERIFYING -> COMPLETED, with PAUSED/RESUMING modeled for a
+    # future resume feature) — see RELIABILITY_DESIGN.md §6.2.
+    state: IncomingTransferStateMachine = field(default_factory=IncomingTransferStateMachine, repr=False)
     _file_handle: object = field(default=None, repr=False)
 
 
@@ -211,6 +225,7 @@ class FileTransferSession:
         if not ok:
             return None
 
+        transfer.state.transition_to(OutgoingTransferState.WAITING_FOR_ACCEPT)
         self._outgoing[transfer_id] = transfer
         return transfer_id
 
@@ -218,7 +233,10 @@ class FileTransferSession:
         transfer = self._outgoing.get(message["transfer_id"])
         if transfer is None:
             return
-        transfer.status = "sending"
+        try:
+            transfer.state.transition_to(OutgoingTransferState.SENDING)
+        except InvalidTransferTransition:
+            return  # duplicate/late accept for a transfer already past this point — drop it
         if self._task_registry is not None:
             self._task_registry.create_task(
                 self._send_chunks(transfer), group="transfer",
@@ -231,7 +249,10 @@ class FileTransferSession:
         transfer = self._outgoing.get(message["transfer_id"])
         if transfer is None:
             return
-        transfer.status = "rejected"
+        try:
+            transfer.state.transition_to(OutgoingTransferState.REJECTED)
+        except InvalidTransferTransition:
+            return  # a reject arriving after this transfer already resolved — drop it
         self._notify_complete(transfer, False, None, error="rejected")
         self._outgoing.pop(transfer.transfer_id, None)
 
@@ -242,7 +263,7 @@ class FileTransferSession:
                 payload = protocol.encode_file_data(transfer.transfer_id, index, offset, chunk)
                 ok = await self.manager.send_binary(transfer.addr_key, payload)
                 if not ok:
-                    transfer.status = "failed"
+                    transfer.state.transition_to(OutgoingTransferState.FAILED)
                     self._notify_complete(transfer, False, None, error="send_failed")
                     return
                 bytes_sent += len(chunk)
@@ -250,7 +271,7 @@ class FileTransferSession:
 
             done = protocol.make_file_done(transfer.transfer_id, transfer.checksum)
             await self.manager.send(transfer.addr_key, done)
-            transfer.status = "awaiting_ack"
+            transfer.state.transition_to(OutgoingTransferState.WAITING_FOR_COMPLETE_ACK)
 
             try:
                 await asyncio.wait_for(transfer._ack_event.wait(), COMPLETE_ACK_TIMEOUT)
@@ -258,7 +279,9 @@ class FileTransferSession:
             except asyncio.TimeoutError:
                 success = False
 
-            transfer.status = "done" if success else "failed"
+            transfer.state.transition_to(
+                OutgoingTransferState.COMPLETED if success else OutgoingTransferState.FAILED
+            )
             self._notify_complete(
                 transfer,
                 success,
@@ -266,7 +289,7 @@ class FileTransferSession:
                 error=None if success else "ack_failed_or_timeout",
             )
         except OSError:
-            transfer.status = "failed"
+            transfer.state.transition_to(OutgoingTransferState.FAILED)
             self._notify_complete(transfer, False, None, error="os_error")
         finally:
             self._outgoing.pop(transfer.transfer_id, None)
@@ -275,6 +298,8 @@ class FileTransferSession:
         transfer = self._outgoing.get(message["transfer_id"])
         if transfer is None:
             return
+        if transfer.state.state is not OutgoingTransferState.WAITING_FOR_COMPLETE_ACK:
+            return  # a duplicate/late ack for a transfer already resolved — drop it
         transfer._ack_success = bool(message.get("success"))
         transfer._ack_event.set()
 
@@ -335,6 +360,7 @@ class FileTransferSession:
             dest_path=dest_path, part_path=part_path,
         )
         incoming._file_handle = open(part_path, "wb")
+        incoming.state.transition_to(IncomingTransferState.ACCEPTED)
         self._incoming[transfer_id] = incoming
 
         await self.manager.send(addr_key, protocol.make_file_accept(transfer_id))
@@ -354,6 +380,13 @@ class FileTransferSession:
     async def _handle_chunk(self, addr_key: str, message: dict) -> None:
         transfer = self._incoming.get(message["transfer_id"])
         if transfer is None:
+            return
+
+        try:
+            transfer.state.transition_to(IncomingTransferState.RECEIVING)
+        except InvalidTransferTransition:
+            # A chunk arrived for a transfer that's paused, or already
+            # resolved to a terminal state — reject rather than write it.
             return
 
         sequence = message["sequence"]
@@ -389,7 +422,10 @@ class FileTransferSession:
                 os.remove(transfer.dest_path)
             except OSError:
                 pass
-        transfer.status = "failed"
+        try:
+            transfer.state.transition_to(IncomingTransferState.FAILED)
+        except InvalidTransferTransition:
+            pass  # already resolved — the file/dir cleanup above still ran either way
         await self.manager.send(
             transfer.addr_key,
             protocol.make_file_complete_ack(transfer.transfer_id, False, reason),
@@ -400,6 +436,15 @@ class FileTransferSession:
         transfer = self._incoming.pop(message["transfer_id"], None)
         if transfer is None:
             return
+        try:
+            # A zero-byte file sends no chunks, so the transfer can still
+            # be ACCEPTED here — step through RECEIVING so the table
+            # (ACCEPTED -> RECEIVING -> VERIFYING) stays strict.
+            if transfer.state.state is IncomingTransferState.ACCEPTED:
+                transfer.state.transition_to(IncomingTransferState.RECEIVING)
+            transfer.state.transition_to(IncomingTransferState.VERIFYING)
+        except InvalidTransferTransition:
+            return  # file_done for a paused/already-resolved transfer — drop it
         if transfer._file_handle:
             transfer._file_handle.close()
             transfer._file_handle = None
@@ -414,7 +459,7 @@ class FileTransferSession:
         )
 
         if not success:
-            transfer.status = "failed"
+            transfer.state.transition_to(IncomingTransferState.FAILED)
             cleanup_part_file(transfer.part_path)
             self._notify_complete(transfer, False, None, error="checksum_mismatch")
             return
@@ -422,5 +467,5 @@ class FileTransferSession:
         # Atomically rename .part to final dest_path
         finalize_part_file(transfer.part_path, transfer.dest_path)
 
-        transfer.status = "done"
+        transfer.state.transition_to(IncomingTransferState.COMPLETED)
         self._notify_complete(transfer, True, transfer.dest_path)
