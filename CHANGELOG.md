@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.21.6] — Phase 35.2: Error integration (Phase 28-35 reliability program complete)
+
+### Added
+- **`core/app_errors.py`** [NEW]: `parse_or_log()` (validate a received `error`, log-and-drop a malformed one) and `log_not_applied()` (a valid error that changed nothing — unsolicited, duplicate, late, wrong peer, or a non-terminal code — logged at debug level). Nothing that handles an `error` ever sends one back, by construction.
+- **`peer.py`**: `ConnectionManager.send_error()` — best-effort `error` to a connected peer, never raises. `_report_invalid_frame()` produces `INVALID_FRAME` from the read loop right before a malformed authenticated frame drops the connection as it always has (skipped for a malformed `error` itself — no ping-pong; decode/decryption failures stay local-log-only per §7, unchanged).
+- **`file_transfer.py`**: `_handle_error()` correlates a received `error`'s `context.transfer_id` to an active outgoing/incoming transfer *with that same peer*; only a terminal code resolves it, via new `_fail_outgoing()`/`_fail_incoming()` (idempotent — a duplicate/late signal can't notify twice). `_send_chunks()` now checks its transfer's state before each chunk and before/after `file_done`, so an externally-resolved transfer (peer error, peer abort) actually stops streaming instead of finishing the file first. New producers, each only where no existing response already covers the outcome: `TRANSFER_NOT_FOUND` (accept/chunk/done for an unknown transfer), `INVALID_STATE` (chunk or done after a terminal/paused state) — both deduplicated to once per (peer, code, transfer) via a capped `_reported_errors` set. A negative `file_complete_ack` mid-`SENDING` (receiver aborted mid-stream) now stops the sender immediately via the same path.
+- **`chat.py`**: `ChatSession._handle_error()` — the same correlate-by-peer, terminal-only pattern for a pending chat message's `context.message_id`; cancels its timeout watcher and reports `"failed"` immediately rather than waiting out the timeout.
+- **`ui.py`**: `_show_peer_error()` displays the local canonical text for the code — never the peer's own `message` — plus a retry hint when the code allows one.
+- **Test Coverage**: `tests/test_error_integration.py` (21, integration): `INVALID_FRAME` over a real socket pair (and confirms a malformed `error` itself is never answered with one), a real streaming transfer stopped promptly by a real `TRANSFER_NOT_FOUND` (one error for the whole stream, not one per chunk), and handler-level coverage of every "changes nothing" case (wrong peer, non-terminal code, unknown transfer/message, missing context, malformed) for both `FileTransferSession` and `ChatSession`.
+- **Full suite**: 700 passed, 1 skipped, 7 deselected (was 679); benchmark suite (7) still green.
+
+**Phase 28-35 (the reliability program) is now complete**: 28.1 logging, 29/30.1 taxonomy + task registry, 31.1 baselines, 32.1 task ownership (folded into 29/30.1 and 33.1), 33.1 connection FSM, 34.1 transfer FSM, 35.1/35.2 application error protocol.
+
 ## [1.21.5] — Phase 35.1: Application error schema
 
 ### Added

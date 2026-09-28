@@ -81,6 +81,7 @@ from core.trust.store import TrustStore
 from core.trust.device import TrustedDevice, TrustStatus
 from core.trust.revocation import revoke_device, RevocationError
 from core.logging_setup import configure_logging
+from core.app_errors import parse_or_log
 from core.task_registry import TaskRegistry
 from core.identity.fingerprint import format_fingerprint, short_fingerprint
 from core.group import (
@@ -3386,6 +3387,23 @@ class ChatApp(App):
             self._log(f"[cyan]Active peer -> {target_name}[/cyan]")
             self._refresh_peer_list()
 
+    def _show_peer_error(self, addr_key: str, message: dict) -> None:
+        """Phase 35.2 / §7.3: tell the user, in plain language, that the
+        peer reported a problem. The text comes from the local contract for
+        the code — never from the peer's own `message` — and a retry hint
+        is shown only for codes that allow a retry."""
+        info = parse_or_log(message)
+        if info is None:
+            return
+        device_id = self.manager.get_peer_device_id(addr_key) if self.manager else None
+        who = f"Peer {device_id[:8]}" if device_id else "Peer"
+        self._log(f"[yellow]{who} reported: {info.display_text}[/yellow]")
+        if info.retryable and info.retry_hint:
+            hint = info.retry_hint
+            if info.retry_after:
+                hint += f" (suggested wait: about {int(info.retry_after)}s)"
+            self._log(f"[dim]  {hint}[/dim]")
+
     async def _on_network_message_handshake(self, evt: NetworkMessageReceived) -> None:
         msg_type = evt.message.get("type")
         addr_key = evt.addr_key
@@ -3416,6 +3434,8 @@ class ChatApp(App):
                 await self._register_with_rendezvous_hosts(addr_key)
         elif msg_type == "endpoint_update":
             await self._on_endpoint_update(addr_key, evt.message)
+        elif msg_type == "error":
+            self._show_peer_error(addr_key, evt.message)
         elif msg_type == "rendezvous_register":
             await self._on_rendezvous_register(addr_key, evt.message)
         elif msg_type == "rendezvous_lookup":

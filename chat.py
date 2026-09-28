@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
 import protocol
+from core.app_errors import log_not_applied, parse_or_log
 from peer import ConnectionManager
 
 ACK_TIMEOUT = 5.0  # seconds to wait for chat_ack before marking a message failed
@@ -68,6 +69,8 @@ class ChatSession:
             await self._handle_incoming_chat(evt.addr_key, evt.message)
         elif msg_type == "chat_ack":
             self._handle_ack(evt.message)
+        elif msg_type == "error":
+            self._handle_error(evt.addr_key, evt.message)
 
     async def _dispatch(self, addr_key: str, message: dict) -> None:
         msg_type = message.get("type")
@@ -76,6 +79,11 @@ class ChatSession:
             await self._handle_incoming_chat(addr_key, message)
         elif msg_type == "chat_ack":
             self._handle_ack(message)
+        elif msg_type == "error":
+            self._handle_error(addr_key, message)
+            # Other owners (e.g. a transfer) may correlate it too.
+            if getattr(self, "_user_on_message", None):
+                await self._user_on_message(addr_key, message)
         else:
             # not ours — pass through to whatever the caller originally set
             if getattr(self, "_user_on_message", None):
@@ -129,6 +137,30 @@ class ChatSession:
         self._pending.pop(message_id, None)
 
         self._notify_status(message_id, "delivered", addr_key)
+
+    def _handle_error(self, addr_key: str, message: dict) -> None:
+        """Phase 35.2 / §7.3: correlate an `error` with a message still
+        awaiting its ack *from this same peer*. Only a terminal code fails
+        it; unsolicited, duplicate, late, wrong-peer or non-terminal errors
+        are logged at debug level and change nothing."""
+        info = parse_or_log(message)
+        if info is None:
+            return
+        message_id = info.context.get("message_id")
+        if message_id is None:
+            return  # not about a chat message — a transfer or the UI handles it
+        state = self._pending.get(message_id)
+        if state is None or state.addr_key != addr_key:
+            log_not_applied(info, "no matching pending message from this peer")
+            return
+        if not info.terminal:
+            log_not_applied(info, "code is not terminal; message state unchanged")
+            return
+        if state.timeout_task:
+            state.timeout_task.cancel()
+        self._pending.pop(message_id, None)
+        state.status = "failed"
+        self._notify_status(message_id, "failed", state.addr_key)
 
     async def _timeout_watcher(self, message_id: str) -> None:
         try:

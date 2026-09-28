@@ -53,6 +53,15 @@ async def setup():
     # raw messages by hand — otherwise A's on_message is None and it blows
     # up when B sends back a legitimate file_accept/file_complete_ack.
     ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir="/tmp/peerc_sectest_downloads_a")
+
+    # These tests play a hostile peer that crafts offers/chunks by hand. A
+    # real sender that doesn't know a transfer would answer B's file_accept
+    # with TRANSFER_NOT_FOUND (Phase 35.2) and B would abort it -- correct,
+    # but not what a malicious peer would do. Keep A silent so B's side of
+    # the attack scenario stays what's under test.
+    async def _no_error_replies(*args, **kwargs):
+        return False
+    manager_a.send_error = _no_error_replies
     ft_b = file_transfer.FileTransferSession(
         manager_b, downloads_dir=DOWNLOADS_B,
         on_offer_received=accept_offer,

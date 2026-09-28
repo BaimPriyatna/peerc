@@ -46,6 +46,7 @@ from core.transport.timeout import ConnectionClosedError, TransportError
 from core.trust.store import TrustDecision, TrustStore
 from core.task_registry import TaskRegistry
 from core.connection_state import ConnectionState, ConnectionStateMachine, InvalidConnectionTransition
+from core.protocol import ErrorCode
 
 OnMessage = Callable[[str, dict], Awaitable[None]]  # (peer_addr_key, message) -> None
 
@@ -117,6 +118,35 @@ class ConnectionManager:
         # _tunnel_r_keys: maps tunneled session addr_key -> underlying relay r_addr_key.
         # Used to unregister relay tunnel upon session teardown.
         self._tunnel_r_keys: dict[str, str] = {}
+
+    async def send_error(self, addr_key: str, code, *, context=None) -> bool:
+        """Phase 35.2: best-effort `error` to a connected, authenticated
+        peer. Never raises — this runs in failure paths, where a second
+        failure would mask the first — and returns False if it couldn't
+        be sent. Callers must not use this to answer an `error` frame.
+        Only ever reachable post-handshake: sessions are registered only
+        once the handshake has succeeded."""
+        try:
+            msg = protocol.make_error(code, context=context)
+        except ValueError:
+            return False
+        try:
+            return await self.send(addr_key, msg)
+        except Exception:
+            return False
+
+    async def _report_invalid_frame(self, session: SecureSession, payload) -> None:
+        """Tell the peer its authenticated application frame was malformed
+        (INVALID_FRAME), just before the read loop drops the connection as
+        it always has. Skipped when the bad frame was itself an `error`
+        (no error ping-pong), and never for framing/decryption failures —
+        those never reach here and stay local-log-only per §7."""
+        ctx = None
+        if isinstance(payload, dict):
+            if payload.get("type") == "error":
+                return
+            ctx = {k: payload.get(k) for k in ("message_id", "transfer_id", "group_id")}
+        await self.send_error(session.addr_key, ErrorCode.INVALID_FRAME, context=ctx)
 
     def _mark_closing(self, addr_key: str) -> None:
         """Phase 33.1: best-effort, defensive transition to CLOSING from
@@ -274,7 +304,11 @@ class ConnectionManager:
                 if fsm is not None:
                     fsm.require_established(f"dispatching a {kind!r} frame")
                 if kind == "json":
-                    protocol.validate_message(payload)  # raises ProtocolError if malformed
+                    try:
+                        protocol.validate_message(payload)  # raises ProtocolError if malformed
+                    except protocol.ProtocolError:
+                        await self._report_invalid_frame(session, payload)
+                        raise
                     if self.event_bus:
                         from core.events import NetworkMessageReceived
                         await self.event_bus.publish(
@@ -288,7 +322,11 @@ class ConnectionManager:
                     # callback interface doesn't need to change —
                     # FileTransferSession._dispatch treats "file_data"
                     # like any other message type.
-                    decoded = protocol.decode_file_data(payload)  # raises ProtocolError if too short
+                    try:
+                        decoded = protocol.decode_file_data(payload)  # raises ProtocolError if too short
+                    except protocol.ProtocolError:
+                        await self._report_invalid_frame(session, None)
+                        raise
                     decoded["type"] = "file_data"
                     if self.event_bus:
                         from core.events import NetworkMessageReceived

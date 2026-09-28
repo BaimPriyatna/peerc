@@ -1,38 +1,38 @@
 {
   "event_loop_max_lag_sec_during_transfer": {
-    "recorded_at": 1790475999.2726007,
+    "recorded_at": 1790635124.9292765,
     "sample_interval_sec": 0.01,
-    "value": 0.014098795999984759
+    "value": 0.00991182399999957
   },
   "handshake_latency_direct_sec": {
-    "recorded_at": 1790475999.2762303,
-    "value": 0.0010987090000185162
+    "recorded_at": 1790635124.9326158,
+    "value": 0.0010351629999973966
   },
   "handshake_latency_relay_sec": {
-    "recorded_at": 1790476001.688622,
-    "value": 0.0017617390000168598
+    "recorded_at": 1790635127.343469,
+    "value": 0.0013218999999935477
   },
   "peak_memory_during_transfer_mb": {
     "delta_mb": 0.0,
     "fixture_bytes": 32000000,
-    "recorded_at": 1790475999.0394294,
-    "value": 100.546875
+    "recorded_at": 1790635124.7064104,
+    "value": 100.62890625
   },
   "shutdown_time_sec_11_tasks": {
-    "recorded_at": 1790476003.693805,
+    "recorded_at": 1790635129.3485513,
     "task_count": 11,
-    "value": 0.00021932399999968766
+    "value": 0.00022125399999595174
   },
   "transfer_throughput_direct_bytes_per_sec": {
-    "elapsed_sec": 0.04100816099997928,
+    "elapsed_sec": 0.035128505000002974,
     "fixture_bytes": 8000000,
-    "recorded_at": 1790475996.1486115,
-    "value": 195083120.16244867
+    "recorded_at": 1790635121.8618553,
+    "value": 227735282.2159475
   },
   "transfer_throughput_relay_bytes_per_sec": {
-    "elapsed_sec": 0.06707802399995444,
+    "elapsed_sec": 0.058224925000004646,
     "fixture_bytes": 8000000,
-    "recorded_at": 1790475996.6524343,
-    "value": 119264097.58291976
+    "recorded_at": 1790635122.3536568,
+    "value": 137398201.88689572
   }
 }

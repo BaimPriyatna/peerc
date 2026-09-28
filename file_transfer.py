@@ -19,6 +19,7 @@ import os
 import shutil
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
@@ -37,6 +38,8 @@ from core.transfer import (
     sha256_file,
 )
 from peer import ConnectionManager
+from core.app_errors import log_not_applied, parse_or_log
+from core.protocol import ErrorCode
 from core.transfer_state import (
     IncomingTransferState,
     IncomingTransferStateMachine,
@@ -46,6 +49,11 @@ from core.transfer_state import (
 )
 
 CHUNK_SIZE = DEFAULT_CHUNK_SIZE  # 64 KB per chunk
+
+# Phase 35.2: remember the last N (peer, code, transfer) errors already
+# reported so a peer streaming chunks at a transfer we no longer have
+# gets ONE error, not one per chunk.
+_ERROR_REPORT_CAP = 256
 
 PathTraversalError = TransferSecurityError
 _sha256_file = sha256_file
@@ -121,6 +129,7 @@ class FileTransferSession:
 
         self._outgoing: dict[str, OutgoingTransfer] = {}
         self._incoming: dict[str, IncomingTransfer] = {}
+        self._reported_errors: "OrderedDict[tuple, None]" = OrderedDict()
 
         if self.event_bus:
             from core.events import NetworkMessageReceived
@@ -139,6 +148,7 @@ class FileTransferSession:
             "file_data": self._handle_chunk,
             "file_done": self._handle_done,
             "file_complete_ack": self._handle_complete_ack,
+            "error": self._handle_error,
         }
         handler = handlers.get(msg_type)
         if handler:
@@ -153,12 +163,90 @@ class FileTransferSession:
             "file_data": self._handle_chunk,
             "file_done": self._handle_done,
             "file_complete_ack": self._handle_complete_ack,
+            "error": self._handle_error,
         }
         handler = handlers.get(msg_type)
         if handler:
             await handler(addr_key, message)
+            if msg_type == "error" and getattr(self, "_next_on_message", None):
+                await self._next_on_message(addr_key, message)  # ChatSession correlates message_id
         elif getattr(self, "_next_on_message", None):
             await self._next_on_message(addr_key, message)
+
+    async def _report_once(self, addr_key: str, code: ErrorCode, transfer_id) -> None:
+        """Phase 35.2: tell the peer about an outcome no existing response
+        covers, at most once per (peer, code, transfer). Never answers an
+        `error` (nothing that handles one calls this)."""
+        if not isinstance(transfer_id, str) or not transfer_id or len(transfer_id) > 128:
+            return
+        key = (addr_key, code, transfer_id)
+        if key in self._reported_errors:
+            return
+        self._reported_errors[key] = None
+        while len(self._reported_errors) > _ERROR_REPORT_CAP:
+            self._reported_errors.popitem(last=False)
+        await self.manager.send_error(addr_key, code, context={"transfer_id": transfer_id})
+
+    def _fail_outgoing(self, transfer: "OutgoingTransfer", error: str) -> bool:
+        """Resolve an outgoing transfer as FAILED from anywhere (send
+        failure, peer error, peer abort). Idempotent: returns False if it
+        had already resolved, so a duplicate/late signal can't notify twice."""
+        try:
+            transfer.state.transition_to(OutgoingTransferState.FAILED)
+        except InvalidTransferTransition:
+            return False
+        self._outgoing.pop(transfer.transfer_id, None)
+        transfer._ack_success = False
+        transfer._ack_event.set()  # wake _send_chunks if it's waiting on the ack
+        self._notify_complete(transfer, False, None, error=error)
+        return True
+
+    def _fail_incoming(self, transfer: "IncomingTransfer", error: str) -> bool:
+        """Resolve an incoming transfer as FAILED because the sender said
+        so — cleans up locally and sends nothing back."""
+        try:
+            transfer.state.transition_to(IncomingTransferState.FAILED)
+        except InvalidTransferTransition:
+            return False
+        self._incoming.pop(transfer.transfer_id, None)
+        if transfer._file_handle:
+            try:
+                transfer._file_handle.close()
+            except OSError:
+                pass
+            transfer._file_handle = None
+        if transfer.part_path and os.path.exists(transfer.part_path):
+            cleanup_part_file(transfer.part_path)
+        self._notify_complete(transfer, False, None, error=error)
+        return True
+
+    async def _handle_error(self, addr_key: str, message: dict) -> None:
+        """Phase 35.2 / §7.3: correlate a received `error` with an active
+        transfer *with this same peer*. Only a terminal code fails it;
+        unsolicited, duplicate, late, wrong-peer or non-terminal errors
+        are logged at debug level and change nothing."""
+        info = parse_or_log(message)
+        if info is None:
+            return
+        transfer_id = info.context.get("transfer_id")
+        if transfer_id is None:
+            return  # not about a transfer — ChatSession / the UI handle other contexts
+        out = self._outgoing.get(transfer_id)
+        inc = self._incoming.get(transfer_id)
+        if out is not None and out.addr_key != addr_key:
+            out = None
+        if inc is not None and inc.addr_key != addr_key:
+            inc = None
+        if out is None and inc is None:
+            log_not_applied(info, "no matching active transfer with this peer")
+            return
+        if not info.terminal:
+            log_not_applied(info, "code is not terminal; transfer state unchanged")
+            return
+        error = info.code.value.lower()
+        applied = self._fail_outgoing(out, error) if out is not None else self._fail_incoming(inc, error)
+        if not applied:
+            log_not_applied(info, "transfer already resolved")
 
     def _notify_progress(self, transfer_id: str, done: int, total: int, is_upload: bool = False) -> None:
         if self.event_bus:
@@ -232,6 +320,7 @@ class FileTransferSession:
     async def _handle_accept(self, addr_key: str, message: dict) -> None:
         transfer = self._outgoing.get(message["transfer_id"])
         if transfer is None:
+            await self._report_once(addr_key, ErrorCode.TRANSFER_NOT_FOUND, message.get("transfer_id"))
             return
         try:
             transfer.state.transition_to(OutgoingTransferState.SENDING)
@@ -260,18 +349,24 @@ class FileTransferSession:
         bytes_sent = 0
         try:
             for index, offset, chunk in read_chunks(transfer.filepath, chunk_size=CHUNK_SIZE):
+                if transfer.state.state is not OutgoingTransferState.SENDING:
+                    return  # resolved from outside (peer error / abort) — stop streaming
                 payload = protocol.encode_file_data(transfer.transfer_id, index, offset, chunk)
                 ok = await self.manager.send_binary(transfer.addr_key, payload)
                 if not ok:
-                    transfer.state.transition_to(OutgoingTransferState.FAILED)
-                    self._notify_complete(transfer, False, None, error="send_failed")
+                    self._fail_outgoing(transfer, "send_failed")
                     return
                 bytes_sent += len(chunk)
                 self._notify_progress(transfer.transfer_id, bytes_sent, transfer.size, is_upload=True)
 
+            if transfer.state.state is not OutgoingTransferState.SENDING:
+                return
             done = protocol.make_file_done(transfer.transfer_id, transfer.checksum)
             await self.manager.send(transfer.addr_key, done)
-            transfer.state.transition_to(OutgoingTransferState.WAITING_FOR_COMPLETE_ACK)
+            try:
+                transfer.state.transition_to(OutgoingTransferState.WAITING_FOR_COMPLETE_ACK)
+            except InvalidTransferTransition:
+                return  # resolved from outside while file_done was in flight
 
             try:
                 await asyncio.wait_for(transfer._ack_event.wait(), COMPLETE_ACK_TIMEOUT)
@@ -279,6 +374,8 @@ class FileTransferSession:
             except asyncio.TimeoutError:
                 success = False
 
+            if transfer.state.state is not OutgoingTransferState.WAITING_FOR_COMPLETE_ACK:
+                return  # resolved from outside while waiting — already notified
             transfer.state.transition_to(
                 OutgoingTransferState.COMPLETED if success else OutgoingTransferState.FAILED
             )
@@ -289,8 +386,7 @@ class FileTransferSession:
                 error=None if success else "ack_failed_or_timeout",
             )
         except OSError:
-            transfer.state.transition_to(OutgoingTransferState.FAILED)
-            self._notify_complete(transfer, False, None, error="os_error")
+            self._fail_outgoing(transfer, "os_error")
         finally:
             self._outgoing.pop(transfer.transfer_id, None)
 
@@ -298,10 +394,16 @@ class FileTransferSession:
         transfer = self._outgoing.get(message["transfer_id"])
         if transfer is None:
             return
-        if transfer.state.state is not OutgoingTransferState.WAITING_FOR_COMPLETE_ACK:
-            return  # a duplicate/late ack for a transfer already resolved — drop it
-        transfer._ack_success = bool(message.get("success"))
-        transfer._ack_event.set()
+        state = transfer.state.state
+        if state is OutgoingTransferState.WAITING_FOR_COMPLETE_ACK:
+            transfer._ack_success = bool(message.get("success"))
+            transfer._ack_event.set()
+        elif state is OutgoingTransferState.SENDING and not message.get("success"):
+            # The receiver aborted mid-stream (out-of-order chunk, size
+            # exceeded, ...): stop streaming instead of finishing the file
+            # and only then noticing.
+            self._fail_outgoing(transfer, "peer_aborted")
+        # anything else is a duplicate / premature / late ack — drop it
 
     # ---- Receiver side -------------------------------------------------
 
@@ -380,13 +482,16 @@ class FileTransferSession:
     async def _handle_chunk(self, addr_key: str, message: dict) -> None:
         transfer = self._incoming.get(message["transfer_id"])
         if transfer is None:
+            await self._report_once(addr_key, ErrorCode.TRANSFER_NOT_FOUND, message.get("transfer_id"))
             return
 
         try:
             transfer.state.transition_to(IncomingTransferState.RECEIVING)
         except InvalidTransferTransition:
             # A chunk arrived for a transfer that's paused, or already
-            # resolved to a terminal state — reject rather than write it.
+            # resolved to a terminal state — reject rather than write it,
+            # and say so (once) instead of silently swallowing it.
+            await self._report_once(addr_key, ErrorCode.INVALID_STATE, message.get("transfer_id"))
             return
 
         sequence = message["sequence"]
@@ -433,8 +538,9 @@ class FileTransferSession:
         self._notify_complete(transfer, False, None, error=reason)
 
     async def _handle_done(self, addr_key: str, message: dict) -> None:
-        transfer = self._incoming.pop(message["transfer_id"], None)
+        transfer = self._incoming.get(message["transfer_id"])
         if transfer is None:
+            await self._report_once(addr_key, ErrorCode.TRANSFER_NOT_FOUND, message.get("transfer_id"))
             return
         try:
             # A zero-byte file sends no chunks, so the transfer can still
@@ -444,7 +550,11 @@ class FileTransferSession:
                 transfer.state.transition_to(IncomingTransferState.RECEIVING)
             transfer.state.transition_to(IncomingTransferState.VERIFYING)
         except InvalidTransferTransition:
-            return  # file_done for a paused/already-resolved transfer — drop it
+            # file_done for a paused/already-resolved transfer: leave the
+            # entry alone (it isn't ours to finish) and say so, once.
+            await self._report_once(addr_key, ErrorCode.INVALID_STATE, message.get("transfer_id"))
+            return
+        self._incoming.pop(transfer.transfer_id, None)
         if transfer._file_handle:
             transfer._file_handle.close()
             transfer._file_handle = None
