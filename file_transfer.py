@@ -37,7 +37,7 @@ from core.transfer import (
     resolve_safe_dest_path,
     sha256_file,
 )
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 from core.app_errors import log_not_applied, parse_or_log
 from core.protocol import ErrorCode
 from core.transfer_state import (

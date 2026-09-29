@@ -160,7 +160,7 @@ from core.vault import (
     unlock_with_recovery_code,
     vault_exists,
 )
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 from core.crypto.encryption import SecureChannel
 from core.crypto.handshake import HANDSHAKE_TIMEOUT, HandshakeError, perform_handshake_initiator
 from core.transport import EncryptedTransport, SecureSession

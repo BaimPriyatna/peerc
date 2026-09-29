@@ -147,6 +147,7 @@ endpoint_update.py` for the shape to copy.
 | `1.21.6` | 35.2 | Phase 35.2: Error integration — `core/app_errors.py` [NEW] (`parse_or_log`, `log_not_applied`); `ConnectionManager.send_error()`/`_report_invalid_frame()` (read-loop malformed-frame producer, INVALID_FRAME); `FileTransferSession`/`ChatSession` correlate a received `error` to an active transfer/message *with the same peer*, only a terminal code resolves it (unsolicited/duplicate/late/wrong-peer/non-terminal change nothing), deduplicated TRANSFER_NOT_FOUND/INVALID_STATE reporting (once per peer+code+transfer, capped); `ui.py` shows the local canonical text, never the peer's own message. Nothing that handles an `error` ever answers with one. **Phase 28-35 reliability program complete** |
 | `1.21.7` | 31/32.2 | Phase 31/32.2: Regression gate — `core/benchmarking.py`: `compare_to_baseline()` (pure, per-metric % change vs. threshold, direction-aware — throughput higher-is-better, memory/lag/latency/shutdown-time lower-is-better), `BASELINE_PATH` (committed, fixed) vs `CURRENT_RUN_PATH` (`docs/benchmarks/latest.json`, gitignored — `record_metric()`'s new default, so a routine run never overwrites the baseline). `scripts/regression_gate.py` [NEW]: runs the benchmark suite fresh, compares against the baseline, prints a report — always exits 0, never a per-push CI gate (manual/`workflow_dispatch`-only `regression-gate` CI job added). **Phase 28-35 reliability program, including its optional final gate, fully complete** |
 | `1.22.0` | 38.2 | Phase 38.2: Packaging scaffold — `pyproject.toml`: `packages.find` (`app*`, `core*`) replaces the manual package list; six empty target packages added (`app`, `app.ui`, `app.ui.widgets`, `app.ui.modals`, `core.discovery`, `core.messaging`). No behavior change. |
+| `1.22.1` | 38.3 | Phase 38.3: Transport manager move — `peer.py` -> `core/transport/manager.py` (`ConnectionManager`), `peer.py` becomes a shim; production imports migrated; uses `core.protocol`. No behavior change. |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -338,7 +339,7 @@ numeric phase order in the plan doc:
    Transfer FSM complete; 35.1 `1.21.5`, 35.2 `1.21.6`, and the optional 31/32.2 `1.21.7`
    regression gate all complete. **Phase 28-35 is fully done.**)
 5. **Phase 38 — Project structure final** (design resolved in
-   `PROJECT_STRUCTURE_DESIGN.md`; in progress on branch `phase-38-project-structure`: 38.2 `1.22.0`)
+   `PROJECT_STRUCTURE_DESIGN.md`; in progress on branch `phase-38-project-structure`: 38.2 `1.22.0`, 38.3 `1.22.1`)
 6. Security audit, release
 
 ## Why Phase 38 Is Deferred

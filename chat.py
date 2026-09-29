@@ -18,7 +18,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 import protocol
 from core.app_errors import log_not_applied, parse_or_log
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 
 ACK_TIMEOUT = 5.0  # seconds to wait for chat_ack before marking a message failed
 

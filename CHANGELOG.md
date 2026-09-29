@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.1] — Phase 38.3: Transport manager move
+
+### Changed
+- **`peer.py` -> `core/transport/manager.py`** (`git mv`, history kept): `ConnectionManager`, `ConnectionLimitError`, `OnMessage`, `CONNECT_TIMEOUT`, `MAX_CONNECTIONS`. `peer.py` is now a re-export shim with identical objects.
+- **Production imports** in `chat.py`, `file_transfer.py` and `ui.py` use `core.transport.manager`; the moved module uses `core.protocol` instead of the root `protocol` shim and drops an unused `discovery` import from its manual harness (now `python -m core.transport.manager`).
+- **Verification**: full suite 709 passed, unchanged. No behavior change.
+
 ## [1.22.0] — Phase 38.2: Packaging scaffold
 
 ### Changed
