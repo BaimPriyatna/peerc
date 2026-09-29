@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.0] — Phase 38.2: Packaging scaffold
+
+### Changed
+- **`pyproject.toml`**: the hand-maintained `packages` list is replaced by `[tool.setuptools.packages.find]` (`app*`, `core*`); root shim modules stay in `py-modules`. Console scripts unchanged.
+- **Empty target packages**: `app`, `app.ui`, `app.ui.widgets`, `app.ui.modals`, `core.discovery`, `core.messaging` (`widgets/` and `modals/` carry an `__init__.py` so auto-discovery includes them).
+- **Verification**: wheel contents compared with the previous build -- nothing removed, six packages added. No behavior change.
+
 ## [1.21.7] — Phase 31/32.2: Regression gate (Phase 28-35 fully complete)
 
 ### Added

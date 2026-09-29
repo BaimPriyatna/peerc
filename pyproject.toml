@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "peerc"
-version = "1.21.7"
+version = "1.22.0"
 description = "Peer-to-peer terminal chat and file transfer application"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,7 +32,10 @@ pchat = "ui:main"
 
 [tool.setuptools]
 py-modules = ["chat", "discovery", "file_transfer", "peer", "protocol", "ui"]
-packages = ["core", "core.protocol", "core.identity", "core.trust", "core.crypto", "core.transport", "core.transfer", "core.security", "core.vault", "core.group", "core.connectivity"]
+
+[tool.setuptools.packages.find]
+# Phase 38: discover nested packages instead of enumerating them by hand.
+include = ["app", "app.*", "core", "core.*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
