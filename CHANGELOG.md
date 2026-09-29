@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.2] — Phase 38.4: Discovery split
+
+### Changed
+- **`discovery.py` -> `core/discovery/`**: `registry.py` (`Peer`, `PeerRegistry`), `broadcast.py` (`Discovery`, UDP, the single packet-validation path), `mdns.py` (optional zeroconf adapter), `identity_loader.py`, and `constants.py` (`BROADCAST_PORT`, `PROTOCOL_VERSION`; added to break the `broadcast` <-> `mdns` import cycle). `discovery.py` is now a re-export shim.
+- **Verification**: top-level definitions AST-identical to the previous `discovery.py`; logger name `peerc.discovery` unchanged; UDP path exercised over real sockets (valid peer registered, forged `device_id` and bad version/port rejected); full suite 709 passed with and without `zeroconf` installed. `tests/test_discovery.py` patch targets moved to `core.discovery.broadcast`.
+- **Known issue (pre-existing, unchanged)**: the mDNS receive side raises `RuntimeError: Use AsyncServiceInfo.async_request from the event loop` (blocking `ServiceInfo.request` inside the event loop), so mDNS never yields peers; identical on `zeroconf` 0.131.0 and later. Deferred to the end of Phase 38.
+
 ## [1.22.1] — Phase 38.3: Transport manager move
 
 ### Changed

@@ -365,8 +365,8 @@ async def test_discovery_run_includes_mdns_task_only_when_available():
         for c in coros:
             c.close()
 
-    with patch("discovery.asyncio.gather", side_effect=fake_gather):
-        with patch("discovery.MDNS_AVAILABLE", True):
+    with patch("core.discovery.broadcast.asyncio.gather", side_effect=fake_gather):
+        with patch("core.discovery.broadcast.MDNS_AVAILABLE", True):
             try:
                 await disc.run()
             except Exception:
@@ -377,8 +377,8 @@ async def test_discovery_run_includes_mdns_task_only_when_available():
 
     gathered_tasks.clear()
 
-    with patch("discovery.asyncio.gather", side_effect=fake_gather):
-        with patch("discovery.MDNS_AVAILABLE", False):
+    with patch("core.discovery.broadcast.asyncio.gather", side_effect=fake_gather):
+        with patch("core.discovery.broadcast.MDNS_AVAILABLE", False):
             try:
                 await disc.run()
             except Exception:
