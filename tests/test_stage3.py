@@ -11,6 +11,7 @@ Verifies:
 import asyncio
 
 import chat
+import core.messaging.session
 from core.identity.device_identity import generate_keypair
 from peer import ConnectionManager
 
@@ -69,7 +70,8 @@ async def main() -> None:
 
     # --- Case 3: connected, but receiver never acks (simulate by disabling B's dispatch) ---
     status_events.clear()
-    chat.ACK_TIMEOUT = 0.5  # speed up the test instead of waiting the real 5s
+    # Phase 38: ChatSession reads ACK_TIMEOUT from core.messaging.session, not the chat.py shim.
+    core.messaging.session.ACK_TIMEOUT = 0.5  # speed up the test instead of waiting the real 5s
 
     addr_key_2 = await manager_a.connect_to("127.0.0.1", PORT_B)
     # Silence B's auto-ack by swapping its handler to a no-op after this point

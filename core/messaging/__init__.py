@@ -1,6 +1,8 @@
 """core.messaging — chat session logic (Phase 38).
 
-Will own ChatSession (acknowledgement state and timeouts). Populated by the
-Phase 38 messaging migration; until then the implementation still lives in
-the root chat.py.
+    session.py  ChatSession: chat sending, delivery acknowledgment state, and
+                ack timeouts, layered on a ConnectionManager
+
+Import from core.messaging.session directly. The root-level chat.py is a
+backward-compatible shim that re-exports its public names.
 """

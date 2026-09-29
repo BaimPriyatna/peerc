@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.3] — Phase 38.5: Chat and transfer sessions
+
+### Changed
+- **`chat.py` -> `core/messaging/session.py`** (`ChatSession`) and **`file_transfer.py` -> `core/transfer/session.py`** (`FileTransferSession`), both via `git mv`; the root modules are re-export shims with identical objects. Both now use `core.protocol`.
+- **Verification**: top-level definitions AST-identical; full suite 709 passed; the manual scripts `tests/test_stage2-5.py` (not collected by pytest) all PASSED, same as the `pre-phase38-refactor` baseline. `tests/test_stage3.py` now sets `ACK_TIMEOUT` on `core.messaging.session`, where `ChatSession` reads it.
+- Session-level resume is not implemented (the FSM only models PAUSED/RESUMING); `.part`/resume handling stays in `core/transfer/`, untouched.
+
 ## [1.22.2] — Phase 38.4: Discovery split
 
 ### Changed

@@ -149,6 +149,7 @@ endpoint_update.py` for the shape to copy.
 | `1.22.0` | 38.2 | Phase 38.2: Packaging scaffold — `pyproject.toml`: `packages.find` (`app*`, `core*`) replaces the manual package list; six empty target packages added (`app`, `app.ui`, `app.ui.widgets`, `app.ui.modals`, `core.discovery`, `core.messaging`). No behavior change. |
 | `1.22.1` | 38.3 | Phase 38.3: Transport manager move — `peer.py` -> `core/transport/manager.py` (`ConnectionManager`), `peer.py` becomes a shim; production imports migrated; uses `core.protocol`. No behavior change. |
 | `1.22.2` | 38.4 | Phase 38.4: Discovery split — `discovery.py` split into `core/discovery/{registry,broadcast,mdns,identity_loader,constants}.py`, `discovery.py` becomes a shim; AST-identical move. Known pre-existing mDNS receive-side bug deferred to the end of Phase 38. |
+| `1.22.3` | 38.5 | Phase 38.5: Chat and transfer sessions — `chat.py` -> `core/messaging/session.py`, `file_transfer.py` -> `core/transfer/session.py`, root modules become shims; AST-identical move, `test_stage3` `ACK_TIMEOUT` target moved. |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -340,7 +341,7 @@ numeric phase order in the plan doc:
    Transfer FSM complete; 35.1 `1.21.5`, 35.2 `1.21.6`, and the optional 31/32.2 `1.21.7`
    regression gate all complete. **Phase 28-35 is fully done.**)
 5. **Phase 38 — Project structure final** (design resolved in
-   `PROJECT_STRUCTURE_DESIGN.md`; in progress on branch `phase-38-project-structure`: 38.2 `1.22.0`, 38.3 `1.22.1`, 38.4 `1.22.2`)
+   `PROJECT_STRUCTURE_DESIGN.md`; in progress on branch `phase-38-project-structure`: 38.2 `1.22.0`, 38.3 `1.22.1`, 38.4 `1.22.2`, 38.5 `1.22.3`)
 6. Security audit, release
 
 ## Why Phase 38 Is Deferred
