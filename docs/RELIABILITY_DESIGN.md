@@ -1,8 +1,10 @@
 # Reliability Design: Phases 28-35
 
 Status: **complete** — 28.1 (`1.21.0`), 29/30.1 (`1.21.1`), 31.1
-(`1.21.2`), 33.1 (`1.21.3`), 34.1 (`1.21.4`), 35.1 (`1.21.5`), and 35.2
-(`1.21.6`) done. The Phase 28-35 reliability program is complete. Phase
+(`1.21.2`), 33.1 (`1.21.3`), 34.1 (`1.21.4`), 35.1 (`1.21.5`), 35.2
+(`1.21.6`), and 31/32.2 (`1.21.7`) all done. The Phase 28-35
+reliability program, including its optional final regression gate,
+is complete. Phase
 32.1 (task registry) was folded in along the way: split across 29/30.1
 (the registry itself, pulled forward at Baim's direction) and 33.1 (the
 bounded-wait/warning-on-deadline-miss it was still missing).

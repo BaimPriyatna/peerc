@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.21.7] — Phase 31/32.2: Regression gate (Phase 28-35 fully complete)
+
+### Added
+- **`core/benchmarking.py`**: `compare_to_baseline(current, baseline, threshold_pct=20.0)` — pure, no I/O: per-metric percent change, direction-aware (`transfer_throughput_*` higher-is-better; `peak_memory_*`/`event_loop_max_lag_*`/`handshake_latency_*`/`shutdown_time_*` lower-is-better via `metric_direction()`'s prefix table), flags a `RegressionFinding` past `threshold_pct` in the bad direction. A metric missing from either side, with no recognized direction, non-numeric, or with a zero baseline is skipped rather than erroring.
+- **Baseline vs. current run split**: `BASELINE_PATH` (`docs/benchmarks/baseline.json`, committed, fixed reference) vs. `CURRENT_RUN_PATH` (`docs/benchmarks/latest.json`, gitignored) — `record_metric()`'s default target changed from the former to the latter, so a routine `pytest -m benchmark` run no longer silently overwrites the committed baseline it's meant to be compared against.
+- **`scripts/regression_gate.py`** [NEW]: runs the benchmark suite fresh into `latest.json`, loads both files, prints a per-metric report. Always exits 0 — a regression is reported for a human to judge (loopback timing on a shared runner is noisy — the standing baseline itself showed a 31.6% swing on `handshake_latency_relay_sec`, a 1.3ms→1.7ms difference, pure measurement noise) — never used to fail a build, per RELIABILITY_DESIGN.md §9's explicit "not a per-push CI gate."
+- **`.github/workflows/tests.yml`**: added `workflow_dispatch` as a manual trigger and a `regression-gate` job that only runs on it (`if: github.event_name == 'workflow_dispatch'`), uploading the fresh run as an artifact. The existing `benchmark` job's comments/artifact name updated to match the `latest.json` rename.
+- **`README.md`**: the "Running Tests" section was still describing the pre-Phase-31.1 8-hardcoded-file `pytest` invocation the CI fix already moved past — corrected to the marker-based commands, plus the new benchmark/regression-gate ones.
+- **Test Coverage**: `tests/test_regression_gate.py` (9, unit): direction lookup, flagged vs. not-flagged in both directions for both metric kinds, threshold boundary, and every skip-not-error case (unrecognized metric, missing from either side, zero baseline, non-numeric value).
+- **Full suite**: 709 passed, 1 skipped, 7 deselected (was 700); benchmark suite (7) still green.
+
+**Phase 28-35 (the reliability program) is now fully complete, including its optional final gate**: 28.1 logging, 29/30.1 taxonomy + task registry, 31.1 baselines, 32.1 task ownership (folded into 29/30.1 and 33.1), 33.1 connection FSM, 34.1 transfer FSM, 35.1/35.2 application error protocol, 31/32.2 regression gate.
+
 ## [1.21.6] — Phase 35.2: Error integration (Phase 28-35 reliability program complete)
 
 ### Added

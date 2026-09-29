@@ -7,3 +7,8 @@ venv/
 *.egg-info/
 build/
 dist/
+
+# Phase 31/32.2: fresh benchmark runs land here, compared against the
+# committed docs/benchmarks/baseline.json — never overwrite the baseline
+# itself with a routine run.
+docs/benchmarks/latest.json

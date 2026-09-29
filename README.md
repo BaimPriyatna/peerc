@@ -8,7 +8,7 @@
 [![Tests](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml/badge.svg)](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.21.6-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.21.7-informational.svg)](CHANGELOG.md)
 
 A terminal-based peer-to-peer chat and file transfer application. No central server — peers discover each other directly over the local network (LAN or WiFi hotspot) and communicate directly over encrypted TCP connections.
 
@@ -230,20 +230,29 @@ peerc/
 ## Running Tests
 
 ```bash
-# Full automated test suite
-pytest tests/test_security_fixes.py tests/test_upgrade_fixes.py \
-       tests/test_handshake.py tests/test_kdf.py tests/test_encryption.py \
-       tests/test_transport.py tests/test_file_transfer_v2.py \
-       --asyncio-mode=auto -v
+# Full suite (benchmark tests excluded by default — see below)
+pytest
 
-# Per-stage smoke scripts (run directly, not via pytest)
+# By layer, using the markers from Phase 29/30.1 (unit/integration/ui/security/benchmark)
+pytest -m unit
+pytest -m security
+
+# Per-stage smoke scripts (no pytest test_ functions — run directly)
 python3 tests/test_stage2.py
 python3 tests/test_stage3.py
 python3 tests/test_stage4.py
 python3 tests/test_stage5.py
+
+# Performance benchmarks (Phase 31.1) — non-gating, records docs/benchmarks/latest.json
+pytest -m benchmark
+
+# Regression gate (Phase 31/32.2) — runs the benchmarks above, then compares
+# the fresh run against the committed docs/benchmarks/baseline.json. Manual
+# only: never a per-push CI gate (loopback timing is noisy on shared runners).
+python3 scripts/regression_gate.py
 ```
 
-The full suite also runs automatically in CI on every push to `main`. See `.github/workflows/tests.yml`.
+The full suite (minus benchmarks) also runs automatically in CI on every push to `main`, alongside a separate non-gating benchmark job. The regression gate itself only runs when the CI workflow is triggered manually (`workflow_dispatch`). See `.github/workflows/tests.yml`.
 
 > [!NOTE]
 > If running on Windows, substitute `python` for `python3`.
@@ -262,12 +271,13 @@ The full suite also runs automatically in CI on every push to `main`. See `.gith
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for phased progress and [`CHANGELOG.md`](CHANGELOG.md) for a full version history.
 
-Current version: **1.21.6** — Phase 36 & 37 (Trust Center UX) complete,
+Current version: **1.21.7** — Phase 36 & 37 (Trust Center UX) complete,
 Phase 28-35 (Reliability program) underway: 28.1 (logging), 29/30.1
 (reliability taxonomy + task registry), 31.1 (performance baselines),
-33.1 (connection lifecycle FSM), 34.1 (transfer lifecycle FSM), and 35 (application
-error protocol, schema + integration) done — the Phase 28-35
-reliability program is now complete!
+33.1 (connection lifecycle FSM), 34.1 (transfer lifecycle FSM), 35 (application
+error protocol), and 31/32.2 (regression gate) done — the Phase
+28-35 reliability program is now fully complete, including its
+optional final gate!
 Interactive trust controls (`Trust`, `Reject`, `Revoke`, `TrustConfirmModal`),
 command `/revoke <id> [reason]`, read-only Trust Center inventory (`/devices`),
 an event-driven pending-trust prompt (`TrustPromptModal`) replacing log-only
