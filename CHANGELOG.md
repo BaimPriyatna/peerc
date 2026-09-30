@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.9] — Phase 38.10: Documentation
+
+### Changed
+- **README**: the Transport Stack diagram names the canonical modules; Usage runs `python3 -m app.main` (noting that `python3 ui.py` still works); Project Structure is rewritten from the filesystem (it listed 6 of the 12 `core/` subpackages and had no `app/` layer at all) and now states the layering rules, the shim contract and where to patch a name; Running Tests lists the boundary and shim suites and `scripts/verify_wheel.py`, and notes that the benchmark baseline is machine-specific.
+- **`docs/PROJECT_STRUCTURE_DESIGN.md`**: the target tree matches the as-built layout (adds `constants.py`) and a new section 9, *As Built*, records every deviation from the design and what is still open.
+- **`docs/ROADMAP.md`**: the obsolete *Why Phase 38 Is Deferred* section is replaced by the Phase 38 status.
+- **Verification**: a check confirmed that all 33 README and 43 design-doc tree paths exist, relative links resolve, and the documented commands run (`python3 -m app.main --help`, `python3 ui.py --help`). Documentation only; suite unchanged (837 passed).
+- **Noticed, not changed (pre-dates Phase 38)**: the README (Architecture > File Transfer) says transfers resume from an existing `.part` offset, but `FileTransferSession` always sends from offset 0 and deletes the `.part` on failure; the resume helpers in `core/transfer/` (`resume.py`, chunker offsets, receiver `prepare`) are not wired into the session. Needs an owner decision: correct the text or implement resume.
+
 ## [1.22.8] — Phase 38.9: Shim suite and installed-wheel test
 
 ### Changed

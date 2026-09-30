@@ -55,6 +55,7 @@ peerc/
 │   ├── discovery/
 │   │   ├── __init__.py
 │   │   ├── broadcast.py
+│   │   ├── constants.py
 │   │   ├── identity_loader.py
 │   │   ├── mdns.py
 │   │   └── registry.py
@@ -209,3 +210,61 @@ developer's `PYTHONPATH` mask missing package data.
 - removal of root shims in the same release as the migration;
 - test-directory reorganization without a test-maintenance reason; and
 - cosmetic rewrites of functioning core modules.
+
+## 9. As Built
+
+Phase 38 was implemented on the `phase-38-project-structure` branch as versions
+`1.22.0`-`1.22.9`, one per sub-step. The result follows this design, with the
+following recorded deviations and decisions.
+
+**Layout**
+
+- `core/discovery/constants.py` was added (`BROADCAST_PORT`, `PROTOCOL_VERSION`).
+  `broadcast.py` depends on `mdns.py`, and `mdns.py` needs those two constants,
+  so defining them in either module created an import cycle.
+- `app/ui/widgets/` and `app/ui/modals/` are packages (each has an
+  `__init__.py`), so package auto-discovery includes them.
+- Modal placement: the Trust Center, trust confirm/prompt/device-detail,
+  security-event and name-setup modals live in `modals/identity.py`; the
+  critical-action-key modal lives in `modals/vault.py`; `_parse_endpoint_line`
+  lives with the link modals.
+- `app/config.py` holds the UI listen port, the IP-change and auto-lock polling
+  intervals, and the relay orchestration timeouts (only `ChatApp` uses them).
+  Key bindings stay on `ChatApp`, and `_SECURITY_EVENT_LOG_CAP` stays in
+  `app/ui/app.py`, so no security constant was centralized for convenience.
+- Modals refer to `ChatApp` only in local type annotations, which are never
+  evaluated; `modals/identity.py` imports it under `TYPE_CHECKING`, so there is
+  no runtime cycle.
+
+**Compatibility**
+
+- The `pchat` console alias was removed by owner decision; `peerc` is the only
+  console script and targets `app.main:main`.
+- `ui.py` keeps an `if __name__ == "__main__": main()` guard so the documented
+  `python3 ui.py` still launches. The other shims are re-exports only.
+- The manual test harnesses moved with their modules
+  (`python -m core.transport.manager`, `core.discovery.broadcast`,
+  `core.messaging.session`).
+- Tests that patched names through a shim were retargeted to the canonical
+  module that reads them (`core.discovery.broadcast.get_network_info`,
+  `core.discovery.broadcast.MDNS_AVAILABLE`, `core.messaging.session.ACK_TIMEOUT`).
+
+**Enforcement**
+
+- `tests/test_import_boundaries.py` makes the dependency rules permanent
+  (static AST scan, including lazy and literal dynamic imports).
+- `tests/test_shims.py` pins object identity and the documented surface of every
+  shim.
+- `scripts/verify_wheel.py` is the clean-environment wheel test. CI installs with
+  `pip install -e .`, so this script, run by hand before a release, is what
+  exercises the packaging configuration.
+
+**Still open at the end of the migration**
+
+- The pre-existing mDNS receive-side bug (blocking `ServiceInfo.request` inside
+  the event loop).
+- About half of the test files still import through a shim instead of the
+  canonical path.
+- Mentions of the old root files in historical documents.
+- `docs/benchmarks/baseline.json` was recorded on a faster machine than the one
+  used to verify this phase; it was not re-baselined.

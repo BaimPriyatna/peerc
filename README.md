@@ -8,7 +8,7 @@
 [![Tests](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml/badge.svg)](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.22.8-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.22.9-informational.svg)](CHANGELOG.md)
 
 A terminal-based peer-to-peer chat and file transfer application. No central server — peers discover each other directly over the local network (LAN or WiFi hotspot) and communicate directly over encrypted TCP connections.
 
@@ -53,7 +53,7 @@ Each instance periodically broadcasts a UDP "announce" packet containing `peer_i
 Connections are layered, and each layer has a single responsibility:
 
 ```
-Application (peer.py / file_transfer.py)
+Application (core/transport/manager.py, core/transfer/session.py)
     SecureSession       — send/receive typed messages, no crypto awareness needed
         EncryptedTransport  — ChaCha20-Poly1305 AEAD framing, sequence-derived nonces
             TCPConnection   — length-prefixed binary framing over TCP
@@ -140,11 +140,13 @@ peerc
 
 Peers appear automatically in the left panel as they are discovered. Once a peer is selected, type in the bottom input box and press Enter to send a chat message.
 
-To run without installing, use:
+To run without installing, from the repository root:
 
 ```bash
-python3 ui.py
+python3 -m app.main
 ```
+
+(`python3 ui.py` still works: `ui.py` is a compatibility shim that forwards to the same entry point.)
 
 ### Diagnostic Logging
 
@@ -199,31 +201,48 @@ Anything that is not a `/` command is sent as a chat message to the active peer.
 
 ```
 peerc/
-├── core/
-│   ├── protocol/       # Wire format, message types, and binary framing
-│   ├── identity/       # Ed25519 device keypair and KeyStore
-│   ├── trust/          # SQLite trust store, TOFU, and revocation
-│   ├── crypto/         # X25519 handshake, HKDF-SHA256 key derivation, ChaCha20-Poly1305
-│   ├── transport/      # Decoupled transport stack (TCPConnection, EncryptedTransport, SecureSession)
-│   └── transfer/       # File Transfer V2 (chunker, hashing, resume, receiver, sender, manager)
-├── docs/
-│   ├── ROADMAP.md
-│   ├── IMPLEMENTATION_PLAN.md
-│   ├── DESIGN.md
-│   ├── BUG_REPORT.md
-│   └── SECURE_STORAGE_DESIGN.md
-├── tests/              # Automated pytest suite and per-stage smoke scripts
-├── discovery.py        # UDP broadcast peer discovery
-├── protocol.py         # Backward-compatible shim over core.protocol
-├── peer.py             # TCP connection management
-├── chat.py             # Chat and delivery acknowledgment
-├── file_transfer.py    # File transfer protocol handler (delegates to core.transfer)
-├── ui.py               # Textual terminal UI (entry point)
-├── .github/workflows/  # CI
+├── app/                        # Application layer (depends on core)
+│   ├── main.py                 # `peerc` entry point and CLI flags
+│   ├── config.py               # UI port and presentation/orchestration timeouts
+│   └── ui/
+│       ├── app.py              # ChatApp, the Textual terminal UI
+│       ├── modals/             # Identity/trust, vault, transfer, and link screens
+│       └── widgets/            # SelectableRichLog and clipboard helper
+├── core/                       # Protocol, security, and networking (never imports app)
+│   ├── protocol/               # Wire format, message types, and binary framing
+│   ├── identity/               # Ed25519 device keypair and KeyStore
+│   ├── trust/                  # SQLite trust store, TOFU, and revocation
+│   ├── crypto/                 # X25519 handshake, HKDF-SHA256 key derivation, ChaCha20-Poly1305
+│   ├── transport/              # TCPConnection, EncryptedTransport, SecureSession, ConnectionManager
+│   ├── transfer/               # File Transfer V2 helpers and FileTransferSession
+│   ├── discovery/              # PeerRegistry, UDP broadcast, optional mDNS, legacy identity loader
+│   ├── messaging/              # ChatSession: chat sending and delivery acknowledgment
+│   ├── connectivity/           # Internet P2P connectivity (rendezvous and relay)
+│   ├── group/                  # Group authority
+│   ├── vault/                  # Secure storage (envelope encryption)
+│   └── security/               # Security architecture and event logging
+├── docs/                       # ROADMAP, design documents, and the benchmark baseline
+├── scripts/                    # regression_gate.py, verify_wheel.py
+├── tests/                      # Automated pytest suite and per-stage smoke scripts
+├── peer.py                     # Shim -> core.transport.manager
+├── discovery.py                # Shim -> core.discovery
+├── chat.py                     # Shim -> core.messaging.session
+├── file_transfer.py            # Shim -> core.transfer.session
+├── protocol.py                 # Shim -> core.protocol
+├── ui.py                       # Shim -> app (ChatApp, modals, main)
+├── .github/workflows/          # CI
 ├── pyproject.toml
 ├── CHANGELOG.md
 └── LICENSE
 ```
+
+The layers depend in one direction only:
+
+- `app` imports `core`; `core` never imports `app`.
+- Production code imports the canonical `app.*` and `core.*` paths. The six root modules (`peer`, `discovery`, `chat`, `file_transfer`, `protocol`, `ui`) exist only so older imports such as `from peer import ConnectionManager` keep working. They contain nothing but re-exports and are published for one compatibility release cycle.
+- When you rebind or monkeypatch a name, patch the canonical module that reads it (for example `core.discovery.broadcast.get_network_info`), not the shim: rebinding a name on a shim does not reach the code that uses it.
+
+`tests/test_import_boundaries.py` enforces these rules statically and `tests/test_shims.py` pins the shim contract; both run with the normal suite. The full layout and its rationale are in [`docs/PROJECT_STRUCTURE_DESIGN.md`](docs/PROJECT_STRUCTURE_DESIGN.md).
 
 ---
 
@@ -236,6 +255,9 @@ pytest
 # By layer, using the markers from Phase 29/30.1 (unit/integration/ui/security/benchmark)
 pytest -m unit
 pytest -m security
+
+# Dependency rules and the legacy-shim contract (also part of the full suite)
+pytest tests/test_import_boundaries.py tests/test_shims.py
 
 # Per-stage smoke scripts (no pytest test_ functions — run directly)
 python3 tests/test_stage2.py
@@ -250,9 +272,16 @@ pytest -m benchmark
 # the fresh run against the committed docs/benchmarks/baseline.json. Manual
 # only: never a per-push CI gate (loopback timing is noisy on shared runners).
 python3 scripts/regression_gate.py
+
+# Before a release: build the wheel, install it into a fresh virtualenv, and test the
+# INSTALLED package from an empty directory (needs network for pip). CI only tests an
+# editable install, so this is what exercises the packaging configuration.
+python3 scripts/verify_wheel.py
 ```
 
 The full suite (minus benchmarks) also runs automatically in CI on every push to `main`, alongside a separate non-gating benchmark job. The regression gate itself only runs when the CI workflow is triggered manually (`workflow_dispatch`). See `.github/workflows/tests.yml`.
+
+`docs/benchmarks/baseline.json` was recorded on one machine, so the regression gate's absolute numbers are only meaningful there. On a different machine, compare the same benchmarks run on the commit under test against the same run on the previous tag instead.
 
 > [!NOTE]
 > If running on Windows, substitute `python` for `python3`.
@@ -271,7 +300,7 @@ The full suite (minus benchmarks) also runs automatically in CI on every push to
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for phased progress and [`CHANGELOG.md`](CHANGELOG.md) for a full version history.
 
-Current version: **1.22.8** — Phase 38 (project structure) in progress: 38.9 Shim suite and installed-wheel test.
+Current version: **1.22.9** — Phase 38 (project structure) in progress: 38.10 Documentation.
 Phase 36 & 37 (Trust Center UX) complete,
 Phase 28-35 (Reliability program) underway: 28.1 (logging), 29/30.1
 (reliability taxonomy + task registry), 31.1 (performance baselines),
