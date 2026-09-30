@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import discovery
+from core.discovery import broadcast as discovery_broadcast
 import protocol
 from core.connectivity.endpoint_update import create_endpoint_update
 from core.connectivity.locator import KIND_DIRECT_V4
@@ -155,7 +155,7 @@ def test_app(tmp_path):
 
 @pytest.mark.asyncio
 async def test_send_self_endpoint_update_sends_one_per_local_ip(test_app, monkeypatch):
-    monkeypatch.setattr(discovery, "get_network_info", lambda: {"local_ips": ["192.168.1.20", "10.0.0.5"]})
+    monkeypatch.setattr(discovery_broadcast, "get_network_info", lambda: {"local_ips": ["192.168.1.20", "10.0.0.5"]})
 
     await test_app._send_self_endpoint_update("1.2.3.4:5656")
 

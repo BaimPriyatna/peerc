@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import discovery
+from core.discovery import broadcast as discovery_broadcast
 from core.identity.device_identity import generate_keypair
 from peer import ConnectionManager
 from ui import ChatApp
@@ -77,7 +77,7 @@ def test_app():
 
 def test_check_ip_change_no_change_is_noop(test_app, monkeypatch):
     test_app._last_known_local_ips = {"192.168.1.20"}
-    monkeypatch.setattr(discovery, "get_network_info", lambda: {"local_ips": ["192.168.1.20"]})
+    monkeypatch.setattr(discovery_broadcast, "get_network_info", lambda: {"local_ips": ["192.168.1.20"]})
 
     test_app._check_ip_change()
 
@@ -87,7 +87,7 @@ def test_check_ip_change_no_change_is_noop(test_app, monkeypatch):
 
 def test_check_ip_change_detects_change(test_app, monkeypatch):
     test_app._last_known_local_ips = {"192.168.1.20"}
-    monkeypatch.setattr(discovery, "get_network_info", lambda: {"local_ips": ["10.0.0.5"]})
+    monkeypatch.setattr(discovery_broadcast, "get_network_info", lambda: {"local_ips": ["10.0.0.5"]})
 
     test_app._check_ip_change()
 
@@ -97,7 +97,7 @@ def test_check_ip_change_detects_change(test_app, monkeypatch):
 
 def test_check_ip_change_ignores_transient_empty_reading(test_app, monkeypatch):
     test_app._last_known_local_ips = {"192.168.1.20"}
-    monkeypatch.setattr(discovery, "get_network_info", lambda: {"local_ips": []})
+    monkeypatch.setattr(discovery_broadcast, "get_network_info", lambda: {"local_ips": []})
 
     test_app._check_ip_change()
 
@@ -112,7 +112,7 @@ def test_check_ip_change_ignores_transient_empty_reading(test_app, monkeypatch):
 
 def test_check_ip_change_detects_added_interface(test_app, monkeypatch):
     test_app._last_known_local_ips = {"192.168.1.20"}
-    monkeypatch.setattr(discovery, "get_network_info", lambda: {"local_ips": ["192.168.1.20", "10.0.0.5"]})
+    monkeypatch.setattr(discovery_broadcast, "get_network_info", lambda: {"local_ips": ["192.168.1.20", "10.0.0.5"]})
 
     test_app._check_ip_change()
 

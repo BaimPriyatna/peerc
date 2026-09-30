@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import discovery
+from core.discovery import broadcast as discovery_broadcast
 from core.connectivity.link import create_link, decode_link
 from core.connectivity.locator import KIND_DIRECT_V4, KIND_DIRECT_V6, KIND_RENDEZVOUS, Endpoint
 from core.connectivity.store import LocatorStore
@@ -113,7 +114,7 @@ async def test_generate_link_flow_happy_path(test_app, monkeypatch):
         return None
 
     test_app.push_screen_wait = fake_push_screen_wait
-    monkeypatch.setattr(discovery, "get_network_info", lambda: {"local_ips": ["192.168.1.20"]})
+    monkeypatch.setattr(discovery_broadcast, "get_network_info", lambda: {"local_ips": ["192.168.1.20"]})
 
     await test_app._generate_link_flow()
 

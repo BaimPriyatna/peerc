@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.5] — Phase 38.6b: ChatApp and main move
+
+### Changed
+- **`ChatApp` -> `app/ui/app.py`, `main()` -> `app/main.py`** (`python -m app.main` works); `ui.py` is now a re-export shim of the legacy UI API and keeps only the `__main__` guard so `python3 ui.py` still launches. `ChatApp` uses canonical imports (`core.discovery.*`, `core.messaging.session`, `core.transfer.session`, `core.protocol`).
+- **Verification**: the 18 rewritten references are the only code change, checked by applying the same substitutions to the original `ChatApp` AST; full suite 709 passed; `tests/test_stage2-5.py` PASSED. Four test files that patched `discovery.get_network_info` through the shim now patch `core.discovery.broadcast` (8 sites, no assertion changed). Console scripts still target `ui:main` until step 7.
+
 ## [1.22.4] — Phase 38.6a: UI config, widget, and modals
 
 ### Changed

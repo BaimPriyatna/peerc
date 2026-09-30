@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import discovery
+from core.discovery import broadcast as discovery_broadcast
 from core.connectivity.endpoint_update import create_endpoint_update
 from core.connectivity.locator import KIND_DIRECT_V4
 from core.connectivity.store import LocatorStore
@@ -337,7 +337,7 @@ async def test_on_lookup_response_happy_path_connects(rendezvous_app):
 
 @pytest.mark.asyncio
 async def test_register_with_rendezvous_hosts_sends_per_group(rendezvous_app, monkeypatch):
-    monkeypatch.setattr(discovery, "get_network_info", lambda: {"local_ips": ["192.168.1.20"]})
+    monkeypatch.setattr(discovery_broadcast, "get_network_info", lambda: {"local_ips": ["192.168.1.20"]})
 
     await rendezvous_app._register_with_rendezvous_hosts("addr-1")
 
@@ -350,7 +350,7 @@ async def test_register_with_rendezvous_hosts_sends_per_group(rendezvous_app, mo
 
 @pytest.mark.asyncio
 async def test_register_with_rendezvous_hosts_no_local_ip_noop(rendezvous_app, monkeypatch):
-    monkeypatch.setattr(discovery, "get_network_info", lambda: {"local_ips": []})
+    monkeypatch.setattr(discovery_broadcast, "get_network_info", lambda: {"local_ips": []})
 
     await rendezvous_app._register_with_rendezvous_hosts("addr-1")
 
