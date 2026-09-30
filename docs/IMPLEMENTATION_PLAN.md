@@ -1535,7 +1535,6 @@ peerc/
     ```toml
     [project.scripts]
     peerc = "app.main:main"
-    pchat = "app.main:main"
     ```
     - `app/*` dan `core/*` masuk package.
     - Root shim tetap ter-package sebagai `py-modules`.
@@ -1547,7 +1546,6 @@ peerc/
     - Test:
       ```bash
       peerc --help
-      pchat --help
       python -m app.main --help
       ```
     - Test legacy imports juga.

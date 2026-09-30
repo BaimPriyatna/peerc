@@ -1,7 +1,6 @@
-"""app/main.py — console-script entry point for peerc / pchat (Phase 38).
+"""app/main.py — console-script entry point for peerc (Phase 38).
 
-`python -m app.main` and (after the entry-point switch) the installed
-`peerc` and `pchat` commands start here.
+`python -m app.main` and the installed `peerc` command both start here.
 """
 
 import argparse

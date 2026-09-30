@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "peerc"
-version = "1.22.5"
+version = "1.22.6"
 description = "Peer-to-peer terminal chat and file transfer application"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,8 +27,7 @@ mdns = ["zeroconf>=0.131"]
 qr = ["qrcode>=7.4"]
 
 [project.scripts]
-peerc = "ui:main"
-pchat = "ui:main"
+peerc = "app.main:main"
 
 [tool.setuptools]
 py-modules = ["chat", "discovery", "file_transfer", "peer", "protocol", "ui"]

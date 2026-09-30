@@ -150,8 +150,9 @@ interaction, state, or accessibility behavior.
    acknowledgement and transfer-resume workflows.
 6. Move `ChatApp`, modals, widgets, and application-only configuration into
    `app`; make `ui.py` a shim that re-exports the legacy public UI API.
-7. Change console scripts to `app.main:main`; retain `peerc` and `pchat` names
-   exactly. Do not leave an entry point targeting a root shim.
+7. Change the console script to `app.main:main`; the command is `peerc` only
+   (the `pchat` alias is removed by owner decision, recorded in the 1.22.6
+   changelog entry). Do not leave an entry point targeting a root shim.
 8. Run import audit. Production code must contain no imports of `peer`,
    `discovery`, `chat`, `file_transfer`, `protocol`, or `ui` except inside the
    six shims.
@@ -159,7 +160,7 @@ interaction, state, or accessibility behavior.
    relay connection smoke tests, and an installed-wheel test in a clean
    environment.
 10. Update README architecture and contributor documentation only after the
-    installed wheel and both console commands succeed.
+    installed wheel and the `peerc` console command succeed.
 
 Each migration step is separately reviewable, but the Phase 38 branch is
 released only when all steps are complete. The tag is the rollback point; no
@@ -175,7 +176,6 @@ Required checks:
 
 ```text
 peerc --help
-pchat --help
 python -m app.main --help
 python -c "from peer import ConnectionManager"
 python -c "from discovery import Discovery, PeerRegistry"
@@ -196,10 +196,11 @@ developer's `PYTHONPATH` mask missing package data.
 - Dedicated shim tests cover every supported root export.
 - UDP discovery, optional mDNS, direct transport, relay transport, chat,
   transfer, vault unlock/lock, and Textual modal flows pass smoke tests.
-- A wheel installed into a clean environment exposes both console commands and
+- A wheel installed into a clean environment exposes the `peerc` console command and
   runs without the source checkout on `sys.path`.
 - No protocol version, database schema, vault format, trust rule, or user
-  workflow changes as part of this phase.
+  workflow changes as part of this phase, other than the deliberate removal of
+  the `pchat` console alias.
 
 ## 8. Out of Scope
 

@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.6] — Phase 38.7: Console script switch
+
+### Changed
+- **Console script**: `peerc` now targets `app.main:main` instead of the root shim `ui:main`; no entry point targets a root shim any more.
+- **Removed: the `pchat` console script** (owner decision) -- only `peerc` remains. `python -m app.main` and `python3 ui.py` still launch the app. `PROJECT_STRUCTURE_DESIGN.md` and `IMPLEMENTATION_PLAN.md` are updated to match (no more `pchat --help` checks); the README install note now lists only `peerc`.
+- **Verification**: full suite and the manual `tests/test_stage2-5.py` scripts green; wheel built and installed into a fresh virtualenv (not editable) -- `entry_points.txt` lists only `peerc`, and `peerc --help` runs.
+
 ## [1.22.5] — Phase 38.6b: ChatApp and main move
 
 ### Changed
