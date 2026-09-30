@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.8] — Phase 38.9: Shim suite and installed-wheel test
+
+### Changed
+- **`tests/test_shims.py`** [NEW] (101): the dedicated shim suite. Every legacy name in all six shims is the *same object* as its canonical home; each shim's `__all__` equals the documented legacy surface; importing a non-UI shim starts no thread and does not import `app`/`textual`; `python -m ui` (the `python3 ui.py` path) and `python -m app.main` still start the app. Mutating a shim (a look-alike subclass, a dropped `__all__` name, a UI import) made the suite fail each time.
+- **`scripts/verify_wheel.py`** [NEW]: builds the wheel, checks its contents (six shims, every `app`/`core` package, nothing from tests/docs/scripts, only `peerc = app.main:main`), installs it into a fresh virtualenv, and from an empty directory with no `PYTHONPATH` confirms `peerc --help`, that all 99 modules import, that the shims resolve inside `site-packages`, and runs a slice of the suite (shims, handshake, connection FSM, relay tunnel, discovery, Textual pilot flows: 192 tests) against the installed package. CI uses `pip install -e .`, so packaging was never exercised before; deliberately excluding `core.discovery` from `packages.find` now makes the script fail. Run by hand before a release; needs network.
+- **Full verification**: suite 837 passed (was 736), including 124 UI and 226 integration tests; `tests/test_stage2-5.py` PASSED; the 7 benchmark tests (deselected by default, so not covered by earlier steps) pass on both the baseline and this tree.
+- **Regression gate**: against the committed `baseline.json` it flags transfer throughput (direct -55%, relay -44%) and event-loop lag, but an A/B on one machine (baseline tag vs this tree, 5 alternating runs each) shows no regression (direct -0.2%, relay +4.0%, lag lower). `baseline.json` was recorded on a faster machine, so the gate's absolute numbers are not comparable across machines; it was not re-baselined.
+- **Deferred by the owner to the end of Phase 38**: migrating test imports to canonical paths (30 of 63 test files still import a shim), the mDNS receive-side bug, and stale mentions of the old files in docs.
+
 ## [1.22.7] — Phase 38.8: Import boundary guard
 
 ### Changed
