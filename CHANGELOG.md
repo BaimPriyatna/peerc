@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.7] — Phase 38.8: Import boundary guard
+
+### Changed
+- **Import audit** (AST-based, 100 production files, including imports nested in functions and literal `importlib.import_module()`/`__import__()` calls): zero imports of `peer`, `discovery`, `chat`, `file_transfer`, `protocol` or `ui` outside the six shims, and no `core` -> `app` imports. Nothing needed rewriting; earlier steps had already migrated every production import.
+- **`tests/test_import_boundaries.py`** [NEW] (27, unit): turns the audit into a permanent static guard -- production code must not import root shims, `core` must not import `app`, the repo root holds exactly the six shims and `pyproject.toml` `py-modules` matches them, no console script targets a root shim, and each shim contains only a docstring, imports from `app`/`core`, `__all__` (plus `ui.py`'s documented `__main__` launch guard). Files are parsed, never imported.
+- **Negative controls**: parametrized synthetic cases prove the scanner flags lazy, aliased and dynamic imports while allowing `from core import protocol` and relative imports; injecting a real violation into `core/`, a shim and a `core` -> `app` import each made the guard fail with `file:line` before being reverted.
+- **Full suite**: 736 passed, 1 skipped, 7 deselected (was 709).
+
 ## [1.22.6] — Phase 38.7: Console script switch
 
 ### Changed
