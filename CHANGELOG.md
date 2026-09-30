@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.4] — Phase 38.6a: UI config, widget, and modals
+
+### Changed
+- **`app/config.py`** (UI port, IP-change/auto-lock intervals, relay orchestration timeouts), **`app/ui/widgets/rich_log.py`** (`SelectableRichLog`, clipboard helper), and **`app/ui/modals/{identity,vault,transfer,link}.py`** (trust/security-event/name-setup modals in `identity`; the critical-action-key modal in `vault`).
+- **Verification**: all 32 top-level definitions AST-identical to the previous `ui.py`; `ChatApp` still lives in `ui.py` and imports the moved names from `app.*`. Modals reference `ChatApp` only in local annotations, so `identity.py` imports it under `TYPE_CHECKING`. Full suite 709 passed; `test_stage5` PASSED.
+
 ## [1.22.3] — Phase 38.5: Chat and transfer sessions
 
 ### Changed
