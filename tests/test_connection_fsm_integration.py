@@ -15,7 +15,7 @@ import pytest
 
 from core.connection_state import ConnectionState
 from core.identity.device_identity import generate_keypair
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 
 pytestmark = pytest.mark.integration
 
@@ -121,7 +121,7 @@ async def test_late_frame_after_closing_is_dropped_not_dispatched():
     await asyncio.sleep(0.1)
     b_addr_key = next(iter(manager_b._connections.keys()))
 
-    import protocol
+    from core import protocol
     msg = protocol.make_chat_message(manager_a.my_identity.device_id, "A", "should be dropped")
 
     # Force B's side of the connection into CLOSING without actually

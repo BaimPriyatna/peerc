@@ -23,7 +23,7 @@ from core.connectivity.store import LocatorStore
 from core.group.membership import create_group, issue_membership_certificate
 from core.group.store import GroupStore
 from core.identity.device_identity import generate_keypair
-from ui import ChatApp
+from app.ui.app import ChatApp
 
 pytestmark = pytest.mark.ui
 

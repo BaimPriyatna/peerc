@@ -38,18 +38,10 @@ import pytest
 
 from core.identity.device_identity import generate_keypair
 from core.security import SecurityEventType, capture_security_events
-from discovery import (
-    BROADCAST_PORT,
-    MDNS_AVAILABLE,
-    MDNS_SERVICE_TYPE,
-    PROTOCOL_VERSION,
-    Discovery,
-    MDNSDiscovery,
-    PeerRegistry,
-    _build_mdns_txt,
-    _mdns_txt_to_packet,
-    get_network_info,
-)
+from core.discovery.constants import BROADCAST_PORT, PROTOCOL_VERSION
+from core.discovery.mdns import MDNS_AVAILABLE, MDNS_SERVICE_TYPE, MDNSDiscovery, _build_mdns_txt, _mdns_txt_to_packet
+from core.discovery.broadcast import Discovery, get_network_info
+from core.discovery.registry import PeerRegistry
 
 pytestmark = pytest.mark.integration
 

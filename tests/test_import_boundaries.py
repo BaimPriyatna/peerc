@@ -10,9 +10,9 @@ layering cannot silently erode after the Phase 38 migration:
     app --------X-> root shims
 
 The six root modules (peer, discovery, chat, file_transfer, protocol, ui) are
-backward-compatibility shims. Production code must import the canonical
-`app.*` / `core.*` paths; only tests may still reach the shims (the dedicated
-shim suite).
+backward-compatibility shims. Production code and tests must import the
+canonical `app.*` / `core.*` paths; the only file allowed to reach the shims is
+the dedicated shim suite, tests/test_shims.py.
 
 Nothing here imports the code under test at runtime — files are parsed, never
 executed — so a violation is reported even if the offending import would fail
@@ -152,6 +152,18 @@ def test_production_code_never_imports_root_shims():
         if hits:
             violations[path.relative_to(REPO).as_posix()] = hits
     assert not violations, "production code must import app.* / core.*, not root shims:\n" + _format(violations)
+
+
+def test_tests_import_canonical_paths_except_the_shim_suite():
+    """After the Phase 38 migration only tests/test_shims.py relies on root imports."""
+    violations = {}
+    for path in sorted((REPO / "tests").glob("*.py")):
+        if path.name == "test_shims.py":
+            continue
+        hits = find_forbidden_imports(path.read_text(encoding="utf-8"), SHIMS)
+        if hits:
+            violations[path.relative_to(REPO).as_posix()] = hits
+    assert not violations, "tests must import app.* / core.*, not root shims:\n" + _format(violations)
 
 
 def test_core_never_imports_app():

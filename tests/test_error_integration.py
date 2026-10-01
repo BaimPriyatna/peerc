@@ -18,13 +18,14 @@ import tempfile
 
 import pytest
 
-import chat
-import file_transfer
-import protocol
+from core.messaging.session import ChatSession, SentMessageState
+from core.protocol import ErrorCode
+from core.transfer.session import FileTransferSession, IncomingTransfer, OutgoingTransfer, _ERROR_REPORT_CAP
+from core import protocol
 from core.identity.device_identity import generate_keypair
 from core.task_registry import TaskRegistry
 from core.transfer_state import IncomingTransferState, OutgoingTransferState
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 
 pytestmark = pytest.mark.integration
 
@@ -119,8 +120,8 @@ async def test_receiver_that_lost_the_transfer_makes_the_sender_stop_promptly():
     manager_a, manager_b, addr_key = await _pair(registry_a=registry_a)
     tmp_a = tempfile.mkdtemp(prefix="peerc_err_a_")
     tmp_b = tempfile.mkdtemp(prefix="peerc_err_b_")
-    ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir=tmp_a)
-    ft_b = file_transfer.FileTransferSession(manager_b, downloads_dir=tmp_b)
+    ft_a = FileTransferSession(manager_a, downloads_dir=tmp_a)
+    ft_b = FileTransferSession(manager_b, downloads_dir=tmp_b)
 
     notified = []
     real_notify = ft_a._notify_complete
@@ -213,7 +214,7 @@ class _SpyManager:
 
 def _ft():
     manager = _SpyManager()
-    ft = file_transfer.FileTransferSession(manager, downloads_dir=tempfile.mkdtemp(prefix="peerc_err_ft_"))
+    ft = FileTransferSession(manager, downloads_dir=tempfile.mkdtemp(prefix="peerc_err_ft_"))
     notified = []
     real = ft._notify_complete
     ft._notify_complete = lambda t, ok, path, error=None: (notified.append((t.transfer_id, ok, error)), real(t, ok, path, error=error))
@@ -221,7 +222,7 @@ def _ft():
 
 
 def _outgoing(ft, tid="t-out", addr_key="peer-a", state=OutgoingTransferState.SENDING):
-    t = file_transfer.OutgoingTransfer(
+    t = OutgoingTransfer(
         transfer_id=tid, addr_key=addr_key, filepath="/dev/null", filename="x", size=0, checksum="",
     )
     t.state.transition_to(OutgoingTransferState.WAITING_FOR_ACCEPT)
@@ -295,7 +296,7 @@ async def test_errors_that_should_change_nothing(scenario):
 async def test_terminal_error_fails_an_incoming_transfer_and_cleans_up_without_replying():
     ft, manager, notified = _ft()
     part = os.path.join(ft.downloads_dir, "x.part")
-    incoming = file_transfer.IncomingTransfer(
+    incoming = IncomingTransfer(
         transfer_id="t-in", addr_key="peer-a", filename="x", size=100, expected_checksum="",
         sender_name="peer", dest_path=os.path.join(ft.downloads_dir, "x"), part_path=part,
     )
@@ -329,20 +330,20 @@ async def test_negative_completion_ack_mid_stream_stops_the_sender():
 async def test_unknown_transfer_reports_are_deduplicated_and_bounded():
     ft, manager, _ = _ft()
     for _ in range(50):
-        await ft._report_once("peer-a", file_transfer.ErrorCode.TRANSFER_NOT_FOUND, "ghost")
+        await ft._report_once("peer-a", ErrorCode.TRANSFER_NOT_FOUND, "ghost")
     assert [s for s in manager.sent if s[0] == "send_error"] == [
-        ("send_error", "peer-a", file_transfer.ErrorCode.TRANSFER_NOT_FOUND),
+        ("send_error", "peer-a", ErrorCode.TRANSFER_NOT_FOUND),
     ]
 
     # Junk / oversized ids are never echoed back at all.
-    await ft._report_once("peer-a", file_transfer.ErrorCode.TRANSFER_NOT_FOUND, "x" * 500)
-    await ft._report_once("peer-a", file_transfer.ErrorCode.TRANSFER_NOT_FOUND, None)
-    await ft._report_once("peer-a", file_transfer.ErrorCode.TRANSFER_NOT_FOUND, 42)
+    await ft._report_once("peer-a", ErrorCode.TRANSFER_NOT_FOUND, "x" * 500)
+    await ft._report_once("peer-a", ErrorCode.TRANSFER_NOT_FOUND, None)
+    await ft._report_once("peer-a", ErrorCode.TRANSFER_NOT_FOUND, 42)
     assert len([s for s in manager.sent if s[0] == "send_error"]) == 1
 
-    for i in range(file_transfer._ERROR_REPORT_CAP + 50):
-        await ft._report_once("peer-a", file_transfer.ErrorCode.INVALID_STATE, f"t-{i}")
-    assert len(ft._reported_errors) <= file_transfer._ERROR_REPORT_CAP
+    for i in range(_ERROR_REPORT_CAP + 50):
+        await ft._report_once("peer-a", ErrorCode.INVALID_STATE, f"t-{i}")
+    assert len(ft._reported_errors) <= _ERROR_REPORT_CAP
 
 
 @pytest.mark.asyncio
@@ -354,7 +355,7 @@ async def test_legacy_dispatch_handles_an_error_and_still_forwards_it():
         forwarded.append(message["type"])
 
     manager.on_message = downstream
-    ft = file_transfer.FileTransferSession(manager, downloads_dir=tempfile.mkdtemp(prefix="peerc_err_leg_"))
+    ft = FileTransferSession(manager, downloads_dir=tempfile.mkdtemp(prefix="peerc_err_leg_"))
     t = _outgoing(ft)
 
     await ft._dispatch("peer-a", _err("SIZE_EXCEEDED", transfer_id="t-out"))
@@ -370,8 +371,8 @@ async def test_legacy_dispatch_handles_an_error_and_still_forwards_it():
 def _chat_with_pending(message_id="m-1", addr_key="peer-a"):
     manager = _SpyManager()
     statuses = []
-    session = chat.ChatSession(manager, on_status_change=lambda mid, s: statuses.append((mid, s)))
-    session._pending[message_id] = chat.SentMessageState(message_id=message_id, addr_key=addr_key)
+    session = ChatSession(manager, on_status_change=lambda mid, s: statuses.append((mid, s)))
+    session._pending[message_id] = SentMessageState(message_id=message_id, addr_key=addr_key)
     return session, manager, statuses
 
 

@@ -8,9 +8,9 @@ Not a full test suite — just a manual verification script for Stage 2.
 
 import asyncio
 
-import protocol
+from core import protocol
 from core.identity.device_identity import generate_keypair
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 
 import pytest
 pytestmark = pytest.mark.integration

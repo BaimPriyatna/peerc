@@ -27,12 +27,8 @@ from core.security.events import (
 )
 from core.trust.revocation import revoke_device
 from core.trust.store import TrustStore
-from ui import (
-    ChatApp,
-    SecurityEventsModal,
-    TrustDeviceDetailModal,
-    _group_security_events,
-)
+from app.ui.app import ChatApp
+from app.ui.modals.identity import SecurityEventsModal, TrustDeviceDetailModal, _group_security_events
 
 pytestmark = pytest.mark.ui
 

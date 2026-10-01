@@ -12,9 +12,9 @@ import hashlib
 import os
 import shutil
 
-import file_transfer
+from core.transfer.session import FileTransferSession
 from core.identity.device_identity import generate_keypair
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 
 import pytest
 pytestmark = pytest.mark.integration
@@ -55,8 +55,8 @@ async def main() -> None:
     def on_complete(transfer_id, success, filepath):
         complete_events.append((transfer_id, success, filepath))
 
-    ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir="/tmp/peerc_test_downloads_a")
-    ft_b = file_transfer.FileTransferSession(
+    ft_a = FileTransferSession(manager_a, downloads_dir="/tmp/peerc_test_downloads_a")
+    ft_b = FileTransferSession(
         manager_b, downloads_dir=DOWNLOADS_B,
         on_offer_received=accept_offer, on_progress=on_progress, on_complete=on_complete,
     )

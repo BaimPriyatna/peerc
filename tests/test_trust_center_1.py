@@ -22,7 +22,8 @@ from core.identity.fingerprint import format_fingerprint
 from core.trust.device import TrustedDevice, TrustStatus
 from core.trust.revocation import revoke_device
 from core.trust.store import TrustStore
-from ui import ChatApp, TrustCenterModal, TrustDeviceDetailModal
+from app.ui.app import ChatApp
+from app.ui.modals.identity import TrustCenterModal, TrustDeviceDetailModal
 
 pytestmark = pytest.mark.ui
 

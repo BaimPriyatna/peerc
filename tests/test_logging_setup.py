@@ -199,5 +199,5 @@ def test_root_logger_does_not_propagate(tmp_path):
 
 
 def test_discovery_logger_is_rooted_under_peerc():
-    import discovery
-    assert discovery._log.name == "peerc.discovery"
+    from core.discovery.mdns import _log
+    assert _log.name == "peerc.discovery"

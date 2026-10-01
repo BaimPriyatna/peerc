@@ -23,7 +23,8 @@ from core.identity.device_identity import generate_keypair
 from core.trust.device import TrustedDevice, TrustStatus
 from core.trust.revocation import revoke_device
 from core.trust.store import TrustStore
-from ui import ChatApp, TrustConfirmModal, TrustDeviceDetailModal
+from app.ui.app import ChatApp
+from app.ui.modals.identity import TrustConfirmModal, TrustDeviceDetailModal
 
 pytestmark = pytest.mark.ui
 

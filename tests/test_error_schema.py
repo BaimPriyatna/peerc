@@ -10,7 +10,7 @@ canonical text rather than whatever the peer put in `message`.
 
 import pytest
 
-import protocol
+from core import protocol
 from core.protocol import ErrorCode, ProtocolError, build_error, parse_error_message
 from core.protocol.error_codes import (
     CONTRACTS,

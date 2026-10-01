@@ -18,15 +18,15 @@ import tempfile
 
 import pytest
 
-import file_transfer
-import protocol
+from core.transfer.session import FileTransferSession, IncomingTransfer, OutgoingTransfer
+from core import protocol
 from core.identity.device_identity import generate_keypair
 from core.task_registry import TaskRegistry
 from core.transfer_state import (
     IncomingTransferState,
     OutgoingTransferState,
 )
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 
 pytestmark = pytest.mark.integration
 
@@ -46,8 +46,8 @@ async def _pair(registry_a=None, on_offer_received_b=None):
     await manager_b.start_server()
     tmp_a = tempfile.mkdtemp(prefix="peerc_tfsm_a_")
     tmp_b = tempfile.mkdtemp(prefix="peerc_tfsm_b_")
-    ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir=tmp_a)
-    ft_b = file_transfer.FileTransferSession(
+    ft_a = FileTransferSession(manager_a, downloads_dir=tmp_a)
+    ft_b = FileTransferSession(
         manager_b, downloads_dir=tmp_b, on_offer_received=on_offer_received_b,
     )
     addr_key = await manager_a.connect_to("127.0.0.1", port_b)
@@ -187,9 +187,9 @@ async def test_late_or_duplicate_complete_ack_is_dropped():
     (e.g. a duplicate, or one that arrives while still SENDING) must not
     set the ack event or overwrite the outcome."""
     manager = ConnectionManager(listen_port=0, my_identity=generate_keypair(), my_name="A")
-    ft = file_transfer.FileTransferSession(manager, downloads_dir=tempfile.mkdtemp(prefix="peerc_tfsm_ack_"))
+    ft = FileTransferSession(manager, downloads_dir=tempfile.mkdtemp(prefix="peerc_tfsm_ack_"))
 
-    transfer = file_transfer.OutgoingTransfer(
+    transfer = OutgoingTransfer(
         transfer_id="t1", addr_key="peer-x", filepath="/dev/null",
         filename="x", size=0, checksum="",
     )
@@ -211,10 +211,10 @@ async def test_late_or_duplicate_complete_ack_is_dropped():
 async def test_chunk_after_terminal_or_paused_state_is_dropped(blocking_state):
     manager = ConnectionManager(listen_port=0, my_identity=generate_keypair(), my_name="B")
     tmp = tempfile.mkdtemp(prefix="peerc_tfsm_chunk_")
-    ft = file_transfer.FileTransferSession(manager, downloads_dir=tmp)
+    ft = FileTransferSession(manager, downloads_dir=tmp)
 
     part_path = os.path.join(tmp, "x.part")
-    incoming = file_transfer.IncomingTransfer(
+    incoming = IncomingTransfer(
         transfer_id="t2", addr_key="peer-y", filename="x", size=100,
         expected_checksum="", sender_name="peer", dest_path=os.path.join(tmp, "x"),
         part_path=part_path,

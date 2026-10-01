@@ -9,7 +9,7 @@ import base64
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-import discovery
+from core.discovery.registry import PeerRegistry
 from core.group.membership import create_group, issue_membership_certificate
 from core.group.policy import GroupPolicy
 from core.group.protocol import (
@@ -19,8 +19,8 @@ from core.group.protocol import (
 )
 from core.group.store import AdminStatus, GroupStore, MembershipStatus
 from core.identity.device_identity import generate_keypair
-import protocol
-from ui import ChatApp
+from core import protocol
+from app.ui.app import ChatApp
 
 pytestmark = pytest.mark.ui
 
@@ -41,7 +41,7 @@ def test_app(tmp_path):
     app.group_store = GroupStore(db_path=db_path)
 
     # Setup registry and manager mocks
-    app.registry = discovery.PeerRegistry()
+    app.registry = PeerRegistry()
     app.manager = MagicMock()
     app.manager.send = AsyncMock()
     app.manager.is_connected = MagicMock(return_value=True)
@@ -165,7 +165,7 @@ async def test_group_join_response_applied_by_member(tmp_path):
     member_app.peer_id = member_kp.device_id
     member_app.public_key_bytes = member_kp.public_key_bytes()
     member_app.group_store = GroupStore(db_path=str(tmp_path / "member_group.db"))
-    member_app.registry = discovery.PeerRegistry()
+    member_app.registry = PeerRegistry()
     member_app.logs = []
     member_app._log = lambda text: member_app.logs.append(text)
 

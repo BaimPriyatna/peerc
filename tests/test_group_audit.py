@@ -28,7 +28,7 @@ from core.group.membership import create_group, issue_membership_certificate
 from core.group.policy import GroupPolicy
 from core.identity.device_identity import generate_keypair
 from core.security.events import SecurityEventType, SecuritySeverity
-from ui import ChatApp
+from app.ui.app import ChatApp
 
 pytestmark = pytest.mark.ui
 

@@ -13,11 +13,11 @@ import shutil
 import struct
 import uuid
 
-import file_transfer
-import protocol
+from core.transfer.session import FileTransferSession
+from core import protocol
 from core.identity.device_identity import generate_keypair
 from core.transport.secure import TYPE_JSON
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 
 import pytest
 pytestmark = pytest.mark.security
@@ -52,7 +52,7 @@ async def setup():
     # Attach a session on A's side too, even though these tests mostly craft
     # raw messages by hand — otherwise A's on_message is None and it blows
     # up when B sends back a legitimate file_accept/file_complete_ack.
-    ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir="/tmp/peerc_sectest_downloads_a")
+    ft_a = FileTransferSession(manager_a, downloads_dir="/tmp/peerc_sectest_downloads_a")
 
     # These tests play a hostile peer that crafts offers/chunks by hand. A
     # real sender that doesn't know a transfer would answer B's file_accept
@@ -62,7 +62,7 @@ async def setup():
     async def _no_error_replies(*args, **kwargs):
         return False
     manager_a.send_error = _no_error_replies
-    ft_b = file_transfer.FileTransferSession(
+    ft_b = FileTransferSession(
         manager_b, downloads_dir=DOWNLOADS_B,
         on_offer_received=accept_offer,
         on_complete=lambda tid, ok, path: complete_events.append((tid, ok, path)),

@@ -10,10 +10,10 @@ Verifies:
 
 import asyncio
 
-import chat
+from core.messaging.session import ChatSession
 import core.messaging.session
 from core.identity.device_identity import generate_keypair
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 
 import pytest
 pytestmark = pytest.mark.integration
@@ -40,8 +40,8 @@ async def main() -> None:
         listen_port=PORT_B, my_identity=generate_keypair(), my_name="B", on_message=None,
     )
 
-    chat_a = chat.ChatSession(manager_a, on_status_change=on_status_a)
-    chat_b = chat.ChatSession(manager_b, on_chat_received=on_received_b)
+    chat_a = ChatSession(manager_a, on_status_change=on_status_a)
+    chat_b = ChatSession(manager_b, on_chat_received=on_received_b)
 
     await manager_a.start_server()
     await manager_b.start_server()

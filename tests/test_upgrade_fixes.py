@@ -4,13 +4,14 @@ test_upgrade_fixes.py — checks for BUG-014, 016, 020, 021, 022, 023, 025.
 
 import asyncio
 
-import chat
-import discovery
-import peer
-import protocol
+from core.messaging.session import ChatSession
+from core.discovery.broadcast import Discovery
+from core.discovery.registry import PeerRegistry
+from core.transport.manager import CONNECT_TIMEOUT
+from core import protocol
 from core.identity.device_identity import generate_keypair
 from core.transport.timeout import ConnectTimeoutError
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 
 import pytest
 pytestmark = pytest.mark.integration
@@ -34,7 +35,7 @@ async def test_connect_timeout():
         except (asyncio.TimeoutError, OSError, ConnectTimeoutError):
             pass
         elapsed = asyncio.get_event_loop().time() - start
-        assert elapsed < 7.0, f"connect_to should time out around {peer.CONNECT_TIMEOUT}s, took {elapsed}s"
+        assert elapsed < 7.0, f"connect_to should time out around {CONNECT_TIMEOUT}s, took {elapsed}s"
         print(f"test_connect_timeout OK — BUG-014 fixed ({elapsed:.1f}s)")
     finally:
         await manager.close_all()
@@ -87,9 +88,9 @@ def test_discovery_packet_validation():
 
     from core.identity.device_identity import generate_keypair
 
-    registry = discovery.PeerRegistry()
+    registry = PeerRegistry()
     me_keypair = generate_keypair()
-    d = discovery.Discovery(
+    d = Discovery(
         peer_id=me_keypair.device_id, name="Me", tcp_port=5656, registry=registry,
         public_key=me_keypair.public_key_bytes(),
     )
@@ -135,7 +136,7 @@ async def test_chat_oversized_text_rejected_client_side():
     manager_b = ConnectionManager(
         listen_port=7502, my_identity=generate_keypair(), my_name="B", on_message=noop,
     )
-    chat_a = chat.ChatSession(manager_a)
+    chat_a = ChatSession(manager_a)
     await manager_a.start_server()
     await manager_b.start_server()
     addr_key = await manager_a.connect_to("127.0.0.1", 7502)
@@ -167,7 +168,7 @@ async def test_ack_race_pending_registered_before_send():
     manager = ConnectionManager(
         listen_port=7503, my_identity=generate_keypair(), my_name="A", on_message=noop,
     )
-    session = chat.ChatSession(manager)
+    session = ChatSession(manager)
 
     original_send = manager.send
 

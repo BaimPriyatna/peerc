@@ -39,10 +39,10 @@ from core.security.events import (
     SecuritySeverity,
     emit as emit_security_event,
 )
-import chat
-import file_transfer
+from core.messaging.session import ChatSession
+from core.transfer.session import FileTransferSession
 from core.identity.device_identity import generate_keypair
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 
 pytestmark = pytest.mark.integration
 
@@ -271,8 +271,8 @@ async def test_event_bus_chat_and_connection_manager_integration():
         listen_port=port_b, my_identity=generate_keypair(), my_name="B", event_bus=bus_b,
     )
 
-    chat_a = chat.ChatSession(manager_a, event_bus=bus_a)
-    chat_b = chat.ChatSession(manager_b, event_bus=bus_b)
+    chat_a = ChatSession(manager_a, event_bus=bus_a)
+    chat_b = ChatSession(manager_b, event_bus=bus_b)
 
     # Verify ARCH-001 fix: neither ChatSession touched manager.on_message!
     assert manager_a.on_message is None
@@ -327,10 +327,10 @@ async def test_event_bus_file_transfer_integration():
     temp_dir_b = tempfile.mkdtemp(prefix="peerc_bus_ft_b_")
 
     try:
-        ft_a = file_transfer.FileTransferSession(
+        ft_a = FileTransferSession(
             manager_a, downloads_dir=temp_dir_a, event_bus=bus_a
         )
-        ft_b = file_transfer.FileTransferSession(
+        ft_b = FileTransferSession(
             manager_b, downloads_dir=temp_dir_b, event_bus=bus_b
         )
 

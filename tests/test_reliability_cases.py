@@ -35,12 +35,12 @@ import tempfile
 
 import pytest
 
-import chat
-import file_transfer
+from core.messaging.session import ChatSession, SentMessageState
+from core.transfer.session import FileTransferSession
 from core.identity.device_identity import generate_keypair
 from core.task_registry import TaskRegistry
-from peer import ConnectionManager
-from ui import ChatApp
+from core.transport.manager import ConnectionManager
+from app.ui.app import ChatApp
 
 pytestmark = pytest.mark.integration
 
@@ -98,8 +98,8 @@ async def test_cancelling_send_chunks_task_stops_cleanly_and_cleans_up():
 
     tmp_dir_a = tempfile.mkdtemp(prefix="peerc_rel_a_")
     tmp_dir_b = tempfile.mkdtemp(prefix="peerc_rel_b_")
-    ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir=tmp_dir_a)
-    ft_b = file_transfer.FileTransferSession(manager_b, downloads_dir=tmp_dir_b)
+    ft_a = FileTransferSession(manager_a, downloads_dir=tmp_dir_a)
+    ft_b = FileTransferSession(manager_b, downloads_dir=tmp_dir_b)
 
     src_path = os.path.join(tmp_dir_a, "payload.bin")
     with open(src_path, "wb") as f:
@@ -151,9 +151,9 @@ async def test_duplicate_ack_is_a_noop():
     not raise, and must not fire a second status-change notification."""
     manager = ConnectionManager(listen_port=0, my_identity=generate_keypair(), my_name="A")
     statuses = []
-    session = chat.ChatSession(manager, on_status_change=lambda mid, s: statuses.append((mid, s)))
+    session = ChatSession(manager, on_status_change=lambda mid, s: statuses.append((mid, s)))
 
-    session._pending["msg-1"] = chat.SentMessageState(message_id="msg-1", addr_key="peer-x")
+    session._pending["msg-1"] = SentMessageState(message_id="msg-1", addr_key="peer-x")
 
     session._handle_ack({"message_id": "msg-1"})
     session._handle_ack({"message_id": "msg-1"})  # duplicate — must be a no-op
@@ -168,9 +168,9 @@ async def test_late_ack_after_timeout_is_a_noop():
     message failed must not raise and must not resurrect the message."""
     manager = ConnectionManager(listen_port=0, my_identity=generate_keypair(), my_name="A")
     statuses = []
-    session = chat.ChatSession(manager, on_status_change=lambda mid, s: statuses.append((mid, s)))
+    session = ChatSession(manager, on_status_change=lambda mid, s: statuses.append((mid, s)))
 
-    session._pending["msg-2"] = chat.SentMessageState(message_id="msg-2", addr_key="peer-x")
+    session._pending["msg-2"] = SentMessageState(message_id="msg-2", addr_key="peer-x")
     # Simulate the timeout watcher having already fired.
     session._pending.pop("msg-2", None)
     session._notify_status("msg-2", "failed", "peer-x")
@@ -201,8 +201,8 @@ async def test_peer_disconnect_during_sending_does_not_hang_or_raise():
 
     tmp_dir_a = tempfile.mkdtemp(prefix="peerc_rel_disc_a_")
     tmp_dir_b = tempfile.mkdtemp(prefix="peerc_rel_disc_b_")
-    ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir=tmp_dir_a)
-    ft_b = file_transfer.FileTransferSession(manager_b, downloads_dir=tmp_dir_b)
+    ft_a = FileTransferSession(manager_a, downloads_dir=tmp_dir_a)
+    ft_b = FileTransferSession(manager_b, downloads_dir=tmp_dir_b)
 
     completions = []
     ft_a.on_complete = lambda tid, success, path: completions.append((tid, success))

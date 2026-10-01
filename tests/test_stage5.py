@@ -22,10 +22,10 @@ import tempfile
 
 import core.identity as identity
 import core.identity.key_storage as ks
-import discovery
+import core.discovery.identity_loader as discovery_identity_loader
 from core.vault.crypto import new_dek
 from core.vault.database import VaultDatabase
-from ui import ChatApp
+from app.ui.app import ChatApp
 
 import pytest
 pytestmark = pytest.mark.ui
@@ -40,7 +40,7 @@ async def main() -> None:
     keystore = ks.KeyStore(plaintext_fallback_path=tmp_key)
 
     saved_load_identity = identity.load_or_create_identity
-    saved_disc_load = discovery.load_or_create_identity
+    saved_disc_load = discovery_identity_loader.load_or_create_identity
     saved_unlock_vault = ChatApp._unlock_vault
     saved_setup_name = ChatApp._maybe_setup_name
     saved_db_unlock = VaultDatabase.unlock.__func__
@@ -68,7 +68,7 @@ async def main() -> None:
         return saved_db_unlock(cls, dek, vault_db_path=vault_db_path, force_fallback=force_fallback)
 
     identity.load_or_create_identity = _isolated_load
-    discovery.load_or_create_identity = _isolated_disc_load
+    discovery_identity_loader.load_or_create_identity = _isolated_disc_load
     ChatApp._unlock_vault = _isolated_unlock_vault
     ChatApp._maybe_setup_name = _isolated_setup_name
     VaultDatabase.unlock = classmethod(_isolated_db_unlock)
@@ -101,7 +101,7 @@ async def main() -> None:
         print("\nSTAGE 5 TEST: PASSED")
     finally:
         identity.load_or_create_identity = saved_load_identity
-        discovery.load_or_create_identity = saved_disc_load
+        discovery_identity_loader.load_or_create_identity = saved_disc_load
         ChatApp._unlock_vault = saved_unlock_vault
         ChatApp._maybe_setup_name = saved_setup_name
         VaultDatabase.unlock = classmethod(saved_db_unlock)

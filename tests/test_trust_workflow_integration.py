@@ -34,8 +34,9 @@ from core.identity.device_identity import generate_keypair
 from core.security import SecurityEventType, capture_security_events
 from core.trust.device import TrustStatus
 from core.trust.store import TrustDecision, TrustStore
-from peer import ConnectionManager
-from ui import ChatApp, TrustPromptModal
+from core.transport.manager import ConnectionManager
+from app.ui.app import ChatApp
+from app.ui.modals.identity import TrustPromptModal
 
 pytestmark = pytest.mark.ui
 

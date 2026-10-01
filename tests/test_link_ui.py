@@ -11,13 +11,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import discovery
+from core.discovery.registry import PeerRegistry
 from core.discovery import broadcast as discovery_broadcast
 from core.connectivity.link import create_link, decode_link
 from core.connectivity.locator import KIND_DIRECT_V4, KIND_DIRECT_V6, KIND_RENDEZVOUS, Endpoint
 from core.connectivity.store import LocatorStore
 from core.identity.device_identity import generate_keypair
-from ui import LinkAddModal, LinkGenerateModal, LinkMenuModal, LinkResultModal, UI_TCP_PORT, ChatApp, _parse_endpoint_line
+from app.ui.modals.link import LinkAddModal, LinkGenerateModal, LinkMenuModal, LinkResultModal, _parse_endpoint_line
+from app.config import UI_TCP_PORT
+from app.ui.app import ChatApp
 
 pytestmark = pytest.mark.ui
 
@@ -86,7 +88,7 @@ def test_app(tmp_path):
     app.display_name = "test-node"
 
     app.locator_store = LocatorStore(db_path=str(tmp_path / "locator.db"))
-    app.registry = discovery.PeerRegistry()
+    app.registry = PeerRegistry()
     app.manager = MagicMock()
     app.manager.connect_to = AsyncMock(return_value="addr-key-1")
     app.manager.send = AsyncMock()

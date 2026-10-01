@@ -19,8 +19,8 @@ import pytest
 
 from core.discovery import broadcast as discovery_broadcast
 from core.identity.device_identity import generate_keypair
-from peer import ConnectionManager
-from ui import ChatApp
+from core.transport.manager import ConnectionManager
+from app.ui.app import ChatApp
 
 pytestmark = pytest.mark.ui
 

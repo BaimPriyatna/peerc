@@ -311,7 +311,7 @@ def test_export_no_policy_enforcer_personal_gate_only():
 # ---------------------------------------------------------------------------
 
 def test_export_wire_messages_and_validation():
-    import protocol
+    from core import protocol
     from core.protocol.errors import ProtocolError
 
     # group_export_request
@@ -364,8 +364,8 @@ def test_export_wire_messages_and_validation():
 @pytest.mark.asyncio
 async def test_ui_group_export_flow(tmp_path):
     from unittest.mock import AsyncMock
-    from ui import ChatApp
-    import discovery
+    from app.ui.app import ChatApp
+    from core.discovery.registry import PeerRegistry
     from core.identity.device_identity import generate_keypair
 
     # Setup admin app
@@ -375,7 +375,7 @@ async def test_ui_group_export_flow(tmp_path):
     admin_app.peer_id = admin_kp.device_id
     admin_app.public_key_bytes = admin_kp.public_key_bytes()
     admin_app.group_store = GroupStore(db_path=str(tmp_path / "admin_grp.db"))
-    admin_app.registry = discovery.PeerRegistry()
+    admin_app.registry = PeerRegistry()
     admin_app.manager = MagicMock()
     admin_app.manager.send = AsyncMock()
     admin_app.manager.is_connected = MagicMock(return_value=True)
@@ -392,7 +392,7 @@ async def test_ui_group_export_flow(tmp_path):
     member_app.peer_id = member_kp.device_id
     member_app.public_key_bytes = member_kp.public_key_bytes()
     member_app.group_store = GroupStore(db_path=str(tmp_path / "member_grp.db"))
-    member_app.registry = discovery.PeerRegistry()
+    member_app.registry = PeerRegistry()
     member_app.manager = MagicMock()
     member_app.manager.send = AsyncMock()
     member_app.manager.is_connected = MagicMock(return_value=True)

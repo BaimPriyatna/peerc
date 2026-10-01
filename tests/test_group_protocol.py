@@ -6,7 +6,7 @@ application through GroupStore. UI commands are deliberately out of scope.
 
 import pytest
 
-import protocol
+from core import protocol
 from core.group.membership import create_group, issue_membership_certificate
 from core.group.policy import GroupPolicy, LeaveRequiresAdminError
 from core.group.protocol import (

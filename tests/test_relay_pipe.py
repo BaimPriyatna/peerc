@@ -23,8 +23,8 @@ from core.crypto.encryption import SecureChannel
 from core.crypto.handshake import perform_handshake_initiator, perform_handshake_responder
 from core.identity.device_identity import generate_keypair
 from core.transport import EncryptedTransport, RelayedStreamReader, RelayedStreamWriter, SecureSession
-from peer import ConnectionManager
-import protocol
+from core.transport.manager import ConnectionManager
+from core import protocol
 
 pytestmark = pytest.mark.integration
 

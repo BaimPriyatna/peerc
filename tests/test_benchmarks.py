@@ -22,11 +22,11 @@ import time
 
 import pytest
 
-import file_transfer
+from core.transfer.session import FileTransferSession
 from core.benchmarking import EventLoopLagSampler, peak_rss_mb, record_metric
 from core.identity.device_identity import generate_keypair
 from core.task_registry import TaskRegistry
-from peer import ConnectionManager
+from core.transport.manager import ConnectionManager
 
 pytestmark = pytest.mark.benchmark
 
@@ -65,8 +65,8 @@ async def test_transfer_throughput_direct():
 
     tmp_a = tempfile.mkdtemp(prefix="peerc_bench_a_")
     tmp_b = tempfile.mkdtemp(prefix="peerc_bench_b_")
-    ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir=tmp_a)
-    file_transfer.FileTransferSession(manager_b, downloads_dir=tmp_b)  # auto-accepts
+    ft_a = FileTransferSession(manager_a, downloads_dir=tmp_a)
+    FileTransferSession(manager_b, downloads_dir=tmp_b)  # auto-accepts
 
     completed = asyncio.Event()
     result = {}
@@ -110,8 +110,8 @@ async def test_transfer_throughput_relay():
 
     tmp_a = tempfile.mkdtemp(prefix="peerc_bench_relay_a_")
     tmp_b = tempfile.mkdtemp(prefix="peerc_bench_relay_b_")
-    ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir=tmp_a)
-    file_transfer.FileTransferSession(manager_b, downloads_dir=tmp_b)  # auto-accepts
+    ft_a = FileTransferSession(manager_a, downloads_dir=tmp_a)
+    FileTransferSession(manager_b, downloads_dir=tmp_b)  # auto-accepts
 
     completed = asyncio.Event()
     result = {}
@@ -166,8 +166,8 @@ async def test_peak_memory_during_transfer():
 
     tmp_a = tempfile.mkdtemp(prefix="peerc_bench_mem_a_")
     tmp_b = tempfile.mkdtemp(prefix="peerc_bench_mem_b_")
-    ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir=tmp_a)
-    file_transfer.FileTransferSession(manager_b, downloads_dir=tmp_b)
+    ft_a = FileTransferSession(manager_a, downloads_dir=tmp_a)
+    FileTransferSession(manager_b, downloads_dir=tmp_b)
 
     completed = asyncio.Event()
     result = {}
@@ -210,8 +210,8 @@ async def test_event_loop_lag_during_transfer():
 
     tmp_a = tempfile.mkdtemp(prefix="peerc_bench_lag_a_")
     tmp_b = tempfile.mkdtemp(prefix="peerc_bench_lag_b_")
-    ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir=tmp_a)
-    file_transfer.FileTransferSession(manager_b, downloads_dir=tmp_b)
+    ft_a = FileTransferSession(manager_a, downloads_dir=tmp_a)
+    FileTransferSession(manager_b, downloads_dir=tmp_b)
 
     completed = asyncio.Event()
     result = {}

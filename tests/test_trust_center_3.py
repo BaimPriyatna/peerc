@@ -22,7 +22,9 @@ from core.identity.device_identity import generate_keypair
 from core.identity.fingerprint import format_fingerprint, short_fingerprint
 from core.trust.device import TrustStatus
 from core.trust.store import TrustStore
-from ui import ChatApp, FileOfferModal, TrustPromptModal
+from app.ui.app import ChatApp
+from app.ui.modals.transfer import FileOfferModal
+from app.ui.modals.identity import TrustPromptModal
 
 pytestmark = pytest.mark.ui
 

@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.10] — Phase 38.11: Test import migration
+
+### Changed
+- **29 test files migrated** from root-shim imports to the canonical `app.*` / `core.*` paths with an AST codemod driven by the same name table that `tests/test_shims.py` pins (62 import statements; `from peer import ConnectionManager` -> `from core.transport.manager import ConnectionManager`, `chat.ChatSession` -> `ChatSession`, `protocol.write_message` -> `protocol.write_frame`, ...). A dry run first listed every ambiguous case (bare uses of a shim module, attribute assignment, name clashes) and found none besides `tests/test_stage5.py`, which was migrated by hand because it reassigns `load_or_create_identity`; it now patches `core.discovery.identity_loader`.
+- **Only `tests/test_shims.py` still imports a root shim.** `tests/test_import_boundaries.py` gains a rule that keeps it that way (28 tests); injecting `from peer import ...` into a test made it fail with `file:line` before being reverted.
+- **Verification**: full suite 838 passed (was 837, +1 for the new rule); `tests/test_stage2-5.py` PASSED; the 7 benchmarks pass; the only new pyflakes messages are three pre-existing unused imports whose path text changed. No production code changed.
+
 ## [1.22.9] — Phase 38.10: Documentation
 
 ### Changed
