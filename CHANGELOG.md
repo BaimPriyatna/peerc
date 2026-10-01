@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.12] — Phase 38.13: mDNS receive-side fix
+
+### Changed
+- **Fixed (pre-existing bug, the only functional change on the Phase 38 branch)**: mDNS advertised this device but never produced a peer. `_PeercServiceListener` resolved discovered services with the blocking `ServiceInfo.request()`, called from `AsyncServiceBrowser`'s callback on the event loop, and zeroconf refuses that (`RuntimeError: Use AsyncServiceInfo.async_request from the event loop`; identical on `zeroconf` 0.131.0 and 0.151.5). The listener now only schedules a task per service that resolves it with `AsyncServiceInfo.async_request()`; the TXT decoding and packet building are unchanged, so the same `Discovery._handle_packet` validation runs. In-flight tasks are held by strong reference, failures are logged (`mDNS: could not resolve peer: ...`) instead of vanishing, and `MDNSDiscovery.run()` cancels pending resolutions on shutdown. This closes the known issue recorded in 1.22.2.
+- **Verified over real mDNS**: two `MDNSDiscovery` instances in one process each discovered the other through the real `Discovery._handle_packet` validation (name and TCP port correct), with no event-loop errors and no tasks left after shutdown, on both `zeroconf` 0.131.0 and 0.151.5. Previously the same run produced four `RuntimeError`s and no packets.
+- **`tests/test_mdns_listener.py`** [NEW] (8, unit): deterministic, using a fake `AsyncServiceInfo`, so no network and no `zeroconf` install is needed. Covers non-blocking `add_service`, packet delivery, the full path into `PeerRegistry`, `update_service`, unresolved services, logged failures that do not stop later ones, cancellation on shutdown, and `remove_service`. All 8 fail against the previous code, and the main ones fail against a mutation that reintroduces the blocking call.
+- **User-visible effect**: on networks where mDNS works, peers announced over mDNS now appear in the peer list; before, only UDP broadcast could find them. **Docs**: the Phase 38 status in `ROADMAP.md` and section 9 of `PROJECT_STRUCTURE_DESIGN.md` now reflect that the cleanup is done; what remains is the benchmark baseline and the merge.
+- **Full suite**: 846 passed, 1 skipped, 7 deselected (was 838).
+
 ## [1.22.11] — Phase 38.12: Old-file mentions
 
 ### Changed

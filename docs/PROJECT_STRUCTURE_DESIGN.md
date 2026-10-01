@@ -214,7 +214,7 @@ developer's `PYTHONPATH` mask missing package data.
 ## 9. As Built
 
 Phase 38 was implemented on the `phase-38-project-structure` branch as versions
-`1.22.0`-`1.22.9`, one per sub-step. The result follows this design, with the
+`1.22.0`-`1.22.12`, one per sub-step. The result follows this design, with the
 following recorded deviations and decisions.
 
 **Layout**
@@ -259,12 +259,25 @@ following recorded deviations and decisions.
   `pip install -e .`, so this script, run by hand before a release, is what
   exercises the packaging configuration.
 
-**Still open at the end of the migration**
+**Final cleanup (1.22.10-1.22.12)**
 
-- The pre-existing mDNS receive-side bug (blocking `ServiceInfo.request` inside
-  the event loop).
-- About half of the test files still import through a shim instead of the
-  canonical path.
-- Mentions of the old root files in historical documents.
+- Test imports were migrated to the canonical paths; `tests/test_shims.py` is
+  the only file that still imports a root shim, and
+  `tests/test_import_boundaries.py` keeps it that way.
+- Mentions of moved files in comments, docstrings and living design documents
+  were updated. Historical documents (`CHANGELOG.md`, `BUG_REPORT.md`,
+  `IMPLEMENTATION_PLAN.md`, the `ROADMAP.md` version table) were left as written.
+- The pre-existing mDNS receive-side bug was fixed: the listener resolved
+  services with the blocking `ServiceInfo.request()` on the event loop, which
+  zeroconf refuses, so mDNS never produced a peer. This is the only functional
+  change on the branch and sits in its own commit (`1.22.12`) so it can be
+  cherry-picked or reverted independently of the structural work.
+
+**Still open**
+
 - `docs/benchmarks/baseline.json` was recorded on a faster machine than the one
   used to verify this phase; it was not re-baselined.
+- The README says transfers resume from an existing `.part` offset, but
+  `FileTransferSession` always sends from offset 0 (the resume helpers in
+  `core/transfer/` are not wired into the session). This predates Phase 38 and
+  needs a separate decision: correct the text or implement resume.

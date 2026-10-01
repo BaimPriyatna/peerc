@@ -35,7 +35,7 @@ from core.discovery.constants import BROADCAST_PORT, PROTOCOL_VERSION
 # ---------------------------------------------------------------------------
 try:
     from zeroconf import ServiceInfo, Zeroconf  # noqa: F401 (checked for availability)
-    from zeroconf.asyncio import AsyncServiceBrowser, AsyncZeroconf
+    from zeroconf.asyncio import AsyncServiceBrowser, AsyncServiceInfo, AsyncZeroconf
     MDNS_AVAILABLE = True
 except ImportError:
     MDNS_AVAILABLE = False
@@ -110,18 +110,27 @@ class _PeercServiceListener:
     """zeroconf ServiceListener that feeds discovered mDNS peers into
     Discovery._handle_packet() for validation and registry insertion.
 
-    add_service / update_service resolve the ServiceInfo to obtain
-    IP + port + TXT, then call on_packet with a synthetic UDP-format packet
-    so _handle_packet's validation runs without any duplication.
+    add_service / update_service are called by AsyncServiceBrowser on the
+    event loop and must not block, so each one only schedules a task that
+    resolves the service with AsyncServiceInfo.async_request() (the blocking
+    ServiceInfo.request() is refused by zeroconf on the event loop). The task
+    then obtains IP + port + TXT and calls on_packet with a synthetic
+    UDP-format packet so _handle_packet's validation runs without any
+    duplication.
     """
+
+    # How long to wait for a service to resolve, in milliseconds.
+    RESOLVE_TIMEOUT_MS = 3000
 
     def __init__(self, on_packet: Callable[[bytes, tuple[str, int]], None]) -> None:
         self._on_packet = on_packet
+        # The event loop keeps only weak references to tasks, so hold strong
+        # ones until each resolution finishes.
+        self._pending: set[asyncio.Task] = set()
 
-    def _handle_info(self, zc: "Zeroconf", name: str) -> None:  # type: ignore[name-defined]
-        from zeroconf import ServiceInfo as _SI
-        info = _SI(MDNS_SERVICE_TYPE, name)
-        if not info.request(zc, timeout=3000):
+    async def _handle_info(self, zc: "Zeroconf", name: str) -> None:  # type: ignore[name-defined]
+        info = AsyncServiceInfo(MDNS_SERVICE_TYPE, name)
+        if not await info.async_request(zc, self.RESOLVE_TIMEOUT_MS):
             return
 
         # Decode TXT properties (keys and values are bytes in zeroconf)
@@ -142,15 +151,32 @@ class _PeercServiceListener:
         packet = _mdns_txt_to_packet(txt, src_ip)
         self._on_packet(packet, (src_ip, BROADCAST_PORT))
 
+    def _schedule(self, zc: "Zeroconf", name: str) -> None:  # type: ignore[name-defined]
+        task = asyncio.get_running_loop().create_task(self._handle_info(zc, name))
+        self._pending.add(task)
+        task.add_done_callback(self._on_task_done)
+
+    def _on_task_done(self, task: "asyncio.Task") -> None:
+        self._pending.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            _log.warning("mDNS: could not resolve peer: %s", exc)
+
+    def cancel_pending(self) -> None:
+        """Cancel resolutions still in flight (called when mDNS shuts down)."""
+        for task in list(self._pending):
+            task.cancel()
+
     def add_service(self, zc: "Zeroconf", type_: str, name: str) -> None:  # type: ignore[name-defined]
-        self._handle_info(zc, name)
+        self._schedule(zc, name)
 
     def update_service(self, zc: "Zeroconf", type_: str, name: str) -> None:  # type: ignore[name-defined]
-        self._handle_info(zc, name)
+        self._schedule(zc, name)
 
     def remove_service(self, zc: "Zeroconf", type_: str, name: str) -> None:  # type: ignore[name-defined]
         pass  # Stale peer eviction is handled by PeerRegistry.prune_stale()
-
 
 class MDNSDiscovery:
     """Advertise this device and browse for peers via mDNS (_peerc._tcp.local.).
@@ -229,6 +255,7 @@ class MDNSDiscovery:
         except asyncio.CancelledError:
             raise
         finally:
+            listener.cancel_pending()
             try:
                 await azc.async_unregister_service(info)
                 await azc.async_close()

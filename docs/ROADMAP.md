@@ -158,6 +158,7 @@ endpoint_update.py` for the shape to copy.
 | `1.22.9` | 38.10 | Phase 38.10: Documentation — README, `PROJECT_STRUCTURE_DESIGN.md` and this roadmap updated to the as-built layout; README and design trees checked against the filesystem. Documentation only. |
 | `1.22.10` | 38.11 | Phase 38.11: Test import migration — 29 test files and `test_stage5` now import canonical paths (AST codemod); `test_import_boundaries` enforces that only `test_shims.py` imports a root shim. No production code changed. |
 | `1.22.11` | 38.12 | Phase 38.12: Old-file mentions — Stale references to moved files in comments, docstrings, test docstrings and two design docs now name the new location (AST-identical apart from docstrings); historical documents left as written. |
+| `1.22.12` | 38.13 | Phase 38.13: mDNS receive-side fix — mDNS receive side fixed: the listener resolves services with `AsyncServiceInfo.async_request` in a task instead of the blocking `ServiceInfo.request`; verified over real mDNS on zeroconf 0.131.0 and 0.151.5; `tests/test_mdns_listener.py` (8). Only functional change on the branch. |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -349,7 +350,7 @@ numeric phase order in the plan doc:
    Transfer FSM complete; 35.1 `1.21.5`, 35.2 `1.21.6`, and the optional 31/32.2 `1.21.7`
    regression gate all complete. **Phase 28-35 is fully done.**)
 5. **Phase 38 — Project structure final** (design resolved in
-   `PROJECT_STRUCTURE_DESIGN.md`; in progress on branch `phase-38-project-structure`: 38.2 `1.22.0`, 38.3 `1.22.1`, 38.4 `1.22.2`, 38.5 `1.22.3`, 38.6a `1.22.4`, 38.6b `1.22.5`, 38.7 `1.22.6`, 38.8 `1.22.7`, 38.9 `1.22.8`, 38.10 `1.22.9`, 38.11 `1.22.10`, 38.12 `1.22.11`)
+   `PROJECT_STRUCTURE_DESIGN.md`; in progress on branch `phase-38-project-structure`: 38.2 `1.22.0`, 38.3 `1.22.1`, 38.4 `1.22.2`, 38.5 `1.22.3`, 38.6a `1.22.4`, 38.6b `1.22.5`, 38.7 `1.22.6`, 38.8 `1.22.7`, 38.9 `1.22.8`, 38.10 `1.22.9`, 38.11 `1.22.10`, 38.12 `1.22.11`, 38.13 `1.22.12`)
 6. Security audit, release
 
 ## Phase 38 — Project Structure
@@ -361,9 +362,12 @@ It is developed on the `phase-38-project-structure` branch, one reviewable step
 per version (`1.22.0` onward, see the table above), and is released only when
 every step is complete — no partial structural release is supported.
 
-Migration steps 2-10 are implemented and verified, including an installed-wheel
-test in a clean environment. What remains before release is the final cleanup:
-the mDNS receive-side bug, migrating test imports to canonical paths, and
-updating mentions of the old files in historical documents. The target layout,
-shim contract, and the as-built deviations are in `PROJECT_STRUCTURE_DESIGN.md`.
+Migration steps 2-10 and the final cleanup are implemented and verified,
+including an installed-wheel test in a clean environment. The cleanup migrated
+the test imports, updated stale mentions of moved files, and fixed the
+pre-existing mDNS receive-side bug as the branch's only functional change (its
+own commit, `1.22.12`). What remains before release is the benchmark baseline
+(`baseline.json` was recorded on a faster machine) and the merge. The target
+layout, shim contract, and the as-built deviations are in
+`PROJECT_STRUCTURE_DESIGN.md`.
 
