@@ -1,9 +1,9 @@
 """tests/test_relay_ui.py — Phase 46.2: relay_request/relay_response
-wired into ui.py's ChatApp.
+wired into app/ui/app.py's ChatApp.
 
 core/connectivity/relay.py's authorize_relay_request() itself is
 already covered by tests/test_relay_authorization.py — these tests
-exercise the ui.py plumbing around it: the not-hosting/not-member
+exercise the app/ui/app.py plumbing around it: the not-hosting/not-member
 silent gates, the explicit accepted=False reply for "not connected to
 target", and wiring ConnectionManager.open_relay_pipe() on the happy
 path. Mirrors tests/test_rendezvous_ui.py's structure.

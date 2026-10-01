@@ -8,8 +8,9 @@ Two things are persisted, deliberately kept apart:
     in a plain JSON file. Safe to read, back up, or hand to another peer;
     it contains nothing secret.
 
-This is the direct replacement for discovery.py's old
-load_or_create_identity(), which generated a bare random UUID. See
+This is the direct replacement for the old
+load_or_create_identity() from discovery.py (now an adapter in
+core/discovery/identity_loader.py), which generated a bare random UUID. See
 Phase 3.0 in IMPLEMENTATION_PLAN.md for why that wasn't good enough.
 """
 
@@ -44,7 +45,7 @@ class DeviceIdentity:
     created_at: float
     storage_backend: str  # "keyring" or "plaintext-file" — worth surfacing to the user
     is_new: bool = False  # True only for the load_or_create_identity() call that
-    # generated this identity for the very first time — lets callers (ui.py) show
+    # generated this identity for the very first time — lets callers (app/ui/app.py) show
     # a first-run "set your name" prompt exactly once, never on subsequent loads.
 
     @property

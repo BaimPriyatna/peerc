@@ -70,7 +70,7 @@ class EncryptedTransport:
         """Encrypt and send an opaque relay-tunnel chunk (Phase 46.1).
 
         Same wire mechanics as send_binary — just a distinct inner marker
-        so the receiving end's dispatch (peer.py's _read_loop) can tell a
+        so the receiving end's dispatch (core/transport/manager.py's _read_loop) can tell a
         relay-tunnel chunk apart from a file_data chunk without either
         one having to inspect the other's payload shape.
         """

@@ -1,5 +1,5 @@
 """
-test_stage2.py — automated sanity check for protocol.py + peer.py.
+test_stage2.py — automated sanity check for core.protocol + core.transport.manager.
 
 Starts two ConnectionManagers on localhost, connects one to the other,
 sends a chat message each way, and asserts both sides receive it correctly.

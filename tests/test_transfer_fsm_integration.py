@@ -2,7 +2,7 @@
 into the live FileTransferSession.
 
 The state machines themselves are covered in isolation by
-tests/test_transfer_fsm.py; this confirms file_transfer.py actually drives
+tests/test_transfer_fsm.py; this confirms core/transfer/session.py actually drives
 and honors them: a real transfer reaches COMPLETED on both sides, a
 duplicate accept no longer spawns a second _send_chunks task (previously
 unguarded — `.status` was a write-only string nothing read back), a

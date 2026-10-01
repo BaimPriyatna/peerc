@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.11] — Phase 38.12: Old-file mentions
+
+### Changed
+- **Comments, docstrings and living docs** that pointed at a file that has since moved now name its new home (42 targeted replacements in 28 files): e.g. `ui.py` -> `app/ui/app.py`, `peer.ConnectionManager` -> `core.transport.manager.ConnectionManager`, `discovery.py's PEER_TIMEOUT` -> `core/discovery/registry.py's PEER_TIMEOUT`, `file_transfer.py` -> `core/transfer/session.py`; in tests, module docstrings of the stage scripts and the relay/rendezvous UI tests; in docs, `GROUP_AUTHORITY_DESIGN.md` and `INTERNET_CONNECTIVITY_DESIGN.md`.
+- **Kept on purpose**: the Phase 38 move notes and shim descriptions, one historical aside in `core/transport/manager.py` (now written "the chat and file-transfer sessions (then `chat.py` and `file_transfer.py`)"), `core/group/protocol.py` and the file viewer's own `protocol.py` (different files that merely share a name), and the historical documents (`CHANGELOG.md`, `BUG_REPORT.md`, `IMPLEMENTATION_PLAN.md`, the `ROADMAP.md` version table), which record what was true when they were written.
+- **Verification**: for all 26 changed `.py` files the AST with docstrings removed is identical to the previous commit, so only comments and docstrings changed; full suite 838 passed.
+
 ## [1.22.10] — Phase 38.11: Test import migration
 
 ### Changed

@@ -109,7 +109,7 @@ def open_secure_file(
             executable_checker(temp_path)
         except (ExecutableBlockedError, ExecutableDetectionError) as e:
             # Describe the detected type *before* deleting the temp file —
-            # callers (e.g. ui.py) can't inspect the file themselves once
+            # callers (e.g. app/ui/app.py) can't inspect the file themselves once
             # it's gone, since the temp_path/metadata tuple this function
             # would have returned is never bound on the caller's side when
             # this function raises instead of returning.
@@ -117,7 +117,7 @@ def open_secure_file(
             # Clean up temp file before re-raising. Checkers may raise either
             # ExecutableBlockedError (this module's contract) or
             # ExecutableDetectionError (raised by check_executable_for_open,
-            # the checker actually wired up in ui.py) — normalize to
+            # the checker actually wired up in app/ui/app.py) — normalize to
             # ExecutableBlockedError either way so callers only need to
             # handle one exception type.
             _secure_delete_temp(temp_path)

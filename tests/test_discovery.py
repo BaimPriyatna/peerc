@@ -326,7 +326,7 @@ def test_mdns_txt_to_packet_reply_is_false():
 
 def test_get_network_info_includes_mdns_available():
     """get_network_info() must expose mdns_available so callers (e.g. /info
-    command in ui.py) can report mDNS status to the user."""
+    command in app/ui/app.py) can report mDNS status to the user."""
     info = get_network_info()
     assert "mdns_available" in info
     assert isinstance(info["mdns_available"], bool)

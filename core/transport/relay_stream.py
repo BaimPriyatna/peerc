@@ -33,7 +33,7 @@ class RelayedStreamReader:
     """Feeds bytes arriving as `relay` chunks to readexactly() callers.
 
     feed_data() is called by whatever is pulling `relay` frames off the
-    real underlying session (see peer.py's ConnectionManager) each time
+    real underlying session (see core/transport/manager.py's ConnectionManager) each time
     one arrives for this tunnel; feed_eof() is called once that
     underlying session itself closes, so a stalled read unblocks with
     the same asyncio.IncompleteReadError a real dead socket would raise.

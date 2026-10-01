@@ -1,5 +1,5 @@
 """
-test_stage5.py — headless smoke test for ui.py using Textual's test harness.
+test_stage5.py — headless smoke test for app/ui/app.py (ChatApp) using Textual's test harness.
 
 Runs the app in memory (no real terminal needed), types a /help command,
 and checks it renders without crashing. This isn't a full integration test

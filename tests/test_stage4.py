@@ -1,5 +1,5 @@
 """
-test_stage4.py — automated check for file_transfer.py.
+test_stage4.py — automated check for core.transfer.session.
 
 Case 1: A offers a file to B, B accepts, file arrives at B intact
         (checksum matches).

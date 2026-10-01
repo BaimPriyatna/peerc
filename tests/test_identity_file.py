@@ -1,7 +1,7 @@
 """tests/test_identity_file.py — Phase 3.4: DeviceIdentity.is_new.
 
 is_new distinguishes "just generated this identity for the very first
-time" from "loaded an existing one" — ui.py uses it to show the
+time" from "loaded an existing one" — app/ui/app.py uses it to show the
 first-run NameSetupModal exactly once, never on later launches.
 """
 

@@ -1,7 +1,7 @@
 """tests/test_connection_fsm_integration.py — Phase 33.1: Connection FSM,
 wired into a real ConnectionManager pair.
 
-Confirms the wiring in peer.py (not just the state machine class in
+Confirms the wiring in core/transport/manager.py (not just the state machine class in
 isolation, covered by tests/test_connection_fsm.py): a real handshake
 reaches ESTABLISHED, disconnect reaches CLOSED, a duplicate/concurrent
 close doesn't crash or resurrect the connection, and a late frame after

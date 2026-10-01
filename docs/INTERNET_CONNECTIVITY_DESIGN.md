@@ -26,7 +26,7 @@ Ed25519 Public Key                IP / IPv6
 
 IP bukan identity. Public key bukan alamat jaringan. **[Already the
 project's model since Phase 3 — `device_id = SHA256(public_key)`,
-completely independent of `discovery.py`'s locator handling.]**
+completely independent of `core/discovery/`'s locator handling.]**
 
 ---
 
@@ -388,7 +388,7 @@ dua toggle tersebut. Kandidat yang merespons dicoba satu per satu.
 
 ```
 Local Discovery
-├── UDP Broadcast   [already implemented, discovery.py]
+├── UDP Broadcast   [already implemented, core/discovery/broadcast.py]
 ├── mDNS
 ├── Interface Discovery
 ├── Known Endpoints

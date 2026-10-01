@@ -195,7 +195,7 @@ async def test_ack_race_pending_registered_before_send():
 
 
 def test_ipv6_connect_parsing():
-    # Exercise the same parsing logic used in ui.py's /connect handler.
+    # Exercise the same parsing logic used in app/ui/app.py's /connect handler.
     def parse(arg, default_port=5656):
         port = default_port
         ip = arg

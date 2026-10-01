@@ -175,7 +175,7 @@ def make_endpoint_update(
 ) -> dict:
     """Phase 44.4: wire wrapper for a core.connectivity.endpoint_update.
     EndpointUpdate. Sent right after a hello/hello_ack completes (see
-    ui.py's _send_self_endpoint_update) so the receiving side's
+    app/ui/app.py's _send_self_endpoint_update) so the receiving side's
     LocatorStore gets a cryptographically-confirmed, reusable entry for
     this device — not just "whatever addr_key this TCP connection came
     from", which a future reconnect attempt can't act on by itself."""

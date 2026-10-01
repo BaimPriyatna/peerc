@@ -10,7 +10,7 @@ Tests covering:
 - Allowed structured fields pass through unredacted
 - Idempotent re-configuration replaces rather than stacks handlers
 - root `peerc` logger does not propagate to the library root logger
-- discovery.py's logger is rooted under `peerc` (part of the tree)
+- core/discovery's logger (peerc.discovery) is rooted under `peerc` (part of the tree)
 """
 
 import logging

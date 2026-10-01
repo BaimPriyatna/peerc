@@ -15,7 +15,7 @@ LocatorStore, mirrors TrustStore/GroupStore's shared vault-connection
 pattern), no signing (core/connectivity/endpoint_update.py, a later
 44.2 sub-step), no network I/O.
 
-Not to be confused with discovery.py's Peer/PeerRegistry: that's an
+Not to be confused with core/discovery/registry.py's Peer/PeerRegistry: that's an
 in-memory, this-session-only cache of LAN broadcast/mDNS sightings,
 pruned on a short timeout (PEER_TIMEOUT) and never persisted. Locator
 is the opposite — a persisted, cross-session record of how to reach a
@@ -37,7 +37,7 @@ VALID_KINDS = frozenset({KIND_DIRECT_V4, KIND_DIRECT_V6, KIND_RENDEZVOUS})
 # How long an endpoint can go without a fresh sighting/update before
 # it's considered stale enough to prune (LocatorStore.prune_stale()).
 # Generous on purpose — Internet endpoints legitimately go quiet for
-# days between sessions; this is not discovery.py's PEER_TIMEOUT.
+# days between sessions; this is not core/discovery/registry.py's PEER_TIMEOUT.
 DEFAULT_STALE_SECONDS = 30 * 24 * 3600  # 30 days
 
 

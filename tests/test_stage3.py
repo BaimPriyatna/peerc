@@ -1,5 +1,5 @@
 """
-test_stage3.py — automated check for chat.py delivery acknowledgment.
+test_stage3.py — automated check for core.messaging.session delivery acknowledgment.
 
 Verifies:
   1. A sent chat message ends up "delivered" once the receiver's auto-ack

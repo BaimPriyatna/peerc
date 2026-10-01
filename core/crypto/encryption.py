@@ -15,7 +15,7 @@ sequence dikelola oleh session layer secara ketat" guidance in the plan:
     - Free replay/reorder detection: decrypt() enforces that the sequence
       number is exactly the next expected one for that direction, no
       separate bookkeeping needed (mirrors the sequence+offset check
-      already used for file_data chunks — see file_transfer.py's BUG-008
+      already used for file_data chunks — see core/transfer/session.py's BUG-008
       handling).
     - No nonce needs to travel on the wire at all — both sides already
       track their own sequence counters, so the frame only needs to carry

@@ -1,11 +1,11 @@
 """tests/test_rendezvous_ui.py — Phase 45.3: rendezvous wired into
-ui.py's ChatApp (host-side register/lookup handling, requester-side
+app/ui/app.py's ChatApp (host-side register/lookup handling, requester-side
 lookup_response verification, the /group rendezvous on|off|find
 command, and self-registration on hello/hello_ack/IP-change).
 
 core/connectivity/rendezvous.py's RendezvousCache logic itself is
 already covered by tests/test_rendezvous_cache.py (45.2) — these tests
-exercise the ui.py plumbing around it: the not-hosting gate, wiring
+exercise the app/ui/app.py plumbing around it: the not-hosting gate, wiring
 authenticated identity through correctly, and the requester re-
 verifying a lookup_response against ITS OWN copy of the target's
 MembershipCertificate rather than trusting the host.

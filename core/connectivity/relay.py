@@ -30,7 +30,7 @@ One wire message drives the request side:
 Authorization shape mirrors core/connectivity/rendezvous.py closely,
 with one deliberate difference in what gets a reply: not-hosting and
 not-a-member stay fully silent (no relay_response at all), same posture
-as _on_rendezvous_lookup's auth-failure gate in ui.py — but "not
+as _on_rendezvous_lookup's auth-failure gate in app/ui/app.py — but "not
 currently connected to the target" is NOT a security-sensitive fact
 once the first two checks pass, so that case gets an explicit
 relay_response(accepted=False), mirroring rendezvous_lookup_response's
@@ -42,7 +42,7 @@ right now.
 
 This module is pure data + authorization logic — no network I/O, no
 knowledge of "is R connected to the target" beyond what the caller
-tells it (that's peer.ConnectionManager's job). ui.py owns the actual
+tells it (that's core.transport.manager.ConnectionManager's job). app/ui/app.py owns the actual
 send/receive wiring, same division as rendezvous.py.
 """
 

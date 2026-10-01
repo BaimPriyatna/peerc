@@ -4,7 +4,7 @@ core/transport/manager.py — direct TCP connections between peers (transport la
 Phase 38: moved here from the root peer.py, which is now a compatibility
 shim. Behavior is unchanged.
 
-Discovery (discovery.py) tells us WHO is out there and WHERE (ip:tcp_port).
+Discovery (core/discovery/) tells us WHO is out there and WHERE (ip:tcp_port).
 This module handles actually connecting to them and exchanging framed,
 authenticated, encrypted messages over TCP.
 
@@ -13,12 +13,12 @@ through core/transport's mutual authenticated handshake and
 ChaCha20-Poly1305 session encryption (initiate_secure_session /
 accept_secure_session — Phase 6-9) instead of raw plaintext asyncio
 streams. Before this, Phase 6-9 existed as fully-implemented, unit-tested
-modules that nothing in the running app actually called — chat.py and
-file_transfer.py were sending JSON straight over plaintext TCP.
+modules that nothing in the running app actually called — the chat and file-transfer
+sessions (then chat.py and file_transfer.py) were sending JSON straight over plaintext TCP.
 
 ConnectionManager's public API (send()/send_binary()/connect_to()/
-is_connected(), addr_key-keyed) is unchanged, so chat.py and
-file_transfer.py didn't need to change. What's new: every connection is
+is_connected(), addr_key-keyed) is unchanged, so the chat and file-transfer
+sessions didn't need to change. What's new: every connection is
 now backed by a SecureSession, so callers can look up an authenticated
 peer_device_id via get_peer_device_id() — previously, the only device_id
 in play was self-reported inside application-level message fields, never
@@ -65,7 +65,7 @@ class ConnectionManager:
     """Owns the TCP server and all active secure sessions.
 
     Sessions are keyed by "ip:port" string (addr_key), same convention as
-    before BUG-004 — chat.py/file_transfer.py address peers this way
+    before BUG-004 — the chat and file-transfer sessions address peers this way
     throughout. Unlike before, each session now also carries a verified
     peer_device_id (get_peer_device_id()); callers that need the
     authenticated identity rather than just "the connection at this
@@ -209,7 +209,7 @@ class ConnectionManager:
             # mismatch, REVOKED device, bad signature, replay) already
             # emit a SecurityEvent from inside handshake.py/TrustStore
             # itself (Phase 41) — the app-level SecurityWarning bridge
-            # (bridge_security_events in ui.py) surfaces those.
+            # (bridge_security_events in app/ui/app.py) surfaces those.
             # RuntimeError covers Phase 39.3: TrustStore detached while
             # the vault is hard-locked (no live conn) — fail closed on
             # new handshakes until re-unlock, without crashing the

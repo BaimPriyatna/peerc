@@ -134,7 +134,7 @@ DENIED
 
 meskipun seseorang mencoba memanggil fungsi tersebut secara langsung —
 matches the project's existing pattern exactly (`validate_message()`
-lives in `core/protocol/`, not in `ui.py`; `KeyStore` and `TrustStore`
+lives in `core/protocol/`, not in the UI layer (`app/`); `KeyStore` and `TrustStore`
 refuse invalid states at the core layer, not just at a UI prompt).
 
 ---

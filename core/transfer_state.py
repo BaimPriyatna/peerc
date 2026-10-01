@@ -15,7 +15,7 @@ RELIABILITY_DESIGN.md §6.2:
        +-----------+------------+-------------+-> REJECTED / CANCELLED / FAILED / EXPIRED
     RECEIVING -> PAUSED -> RESUMING -> RECEIVING
 
-Only the transfer coordinator (file_transfer.py's FileTransferSession)
+Only the transfer coordinator (core/transfer/session.py's FileTransferSession)
 changes state — file/chunk helpers report outcomes, they do not
 independently invent terminal states. transition_to() is the only
 mutator; an illegal transition (duplicate accept, late completion ack,
@@ -24,7 +24,7 @@ than silently overwriting whatever the transfer was already resolved
 to. Terminal states are idempotent (re-entering one is a no-op).
 
 Scoping note: PAUSED/RESUMING are modeled here per the diagram, but
-nothing in file_transfer.py drives them yet — there's no pause/resume
+nothing in core/transfer/session.py drives them yet — there's no pause/resume
 feature wired in (core/transfer/resume.py exists but isn't used by the
 live transfer path). They're legal-but-currently-unreachable target
 states, ready for when that feature is built, same as how

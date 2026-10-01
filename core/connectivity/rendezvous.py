@@ -56,7 +56,7 @@ cache; a relayed device re-registers once it reconnects to a host.  This
 matches the design doc's "Rendezvous bukan data server" explicitly.
 
 This module is pure data + authorization logic — no network I/O.
-Callers (ui.py in 45.3) own the actual send/receive wiring.
+Callers (app/ui/app.py, wired in 45.3) own the actual send/receive wiring.
 """
 
 from __future__ import annotations
@@ -119,7 +119,7 @@ class RendezvousCache:
     dict is correct.
 
     The NonceCache supplied at construction is shared with the rest of the
-    app (same instance endpoint_update_wire.py already uses in ui.py for
+    app (same instance endpoint_update_wire.py already uses in app/ui/app.py for
     incoming endpoint_update messages) — domain-separation in
     core.connectivity.endpoint_update ensures endpoint-update signatures
     can never collide with any other message type.
@@ -146,7 +146,7 @@ class RendezvousCache:
         peer.
 
         *authenticated_device_id* MUST come from the live handshake
-        (peer.ConnectionManager.get_peer_device_id()), never from the
+        (core.transport.manager.ConnectionManager.get_peer_device_id()), never from the
         message itself.
 
         Raises:

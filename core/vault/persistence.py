@@ -2,7 +2,7 @@
 into the encrypted vault database.
 
 This is the piece that actually makes Phase 39 "absorb Phase 27" real:
-instead of chat.py/file_transfer.py reaching into a database directly,
+instead of the chat and file-transfer sessions reaching into a database directly,
 they already publish typed events on the EventBus (Phase 26) — this
 module just subscribes to the ones that represent something worth
 persisting and writes a row.

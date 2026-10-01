@@ -16,7 +16,7 @@ import core.identity as identity
 
 
 def save_identity(peer_id: str, name: str, config_path: str = identity.DEFAULT_IDENTITY_FILE) -> None:
-    """Update the display name in the identity file (used by ui.py's /name
+    """Update the display name in the identity file (used by app/ui/app.py's /name
     rename command).
 
     peer_id is accepted for backward compatibility with the pre-Phase-3

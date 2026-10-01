@@ -1,7 +1,7 @@
 """tests/test_group_ui.py — Phase 42.4: Group Authority UI commands and handlers.
 
 Tests the command dispatcher /groups, /group subcommands, and network callbacks
-for group join/leave/revoke in ui.py.
+for group join/leave/revoke in app/ui/app.py.
 """
 
 import asyncio
