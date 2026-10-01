@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.22.13] — Phase 38.14: README resume claim
+
+### Changed
+- **Fixed (docs)**: the README said transfers resume from an existing `.part` offset. The code does the opposite: an accepted offer deletes any existing `.part` file (`cleanup_part_file` at accept time), the sender always streams from offset 0 (`read_chunks` without a start offset) and the receiver requires `offset == bytes_received` from 0. The Architecture text and the feature list now say that transfers are not resumable yet; the resume building blocks (`get_partial_bytes` in `core/transfer/resume.py`, the chunker's start-offset support) exist and are unit-tested but are not used by `FileTransferSession`. Implementing resume would be separate feature work.
+- **Phase 38 closed out**: `ROADMAP.md` and section 9 of `PROJECT_STRUCTURE_DESIGN.md` record the owner's decisions (the benchmark baseline is deliberately left as is; the README claim is corrected) and mark the phase complete.
+- **Full suite**: unchanged (846 passed); documentation only.
+
 ## [1.22.12] — Phase 38.13: mDNS receive-side fix
 
 ### Changed

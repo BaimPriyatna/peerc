@@ -8,7 +8,7 @@
 [![Tests](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml/badge.svg)](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.22.12-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.22.13-informational.svg)](CHANGELOG.md)
 
 A terminal-based peer-to-peer chat and file transfer application. No central server — peers discover each other directly over the local network (LAN or WiFi hotspot) and communicate directly over encrypted TCP connections.
 
@@ -35,7 +35,7 @@ A terminal-based peer-to-peer chat and file transfer application. No central ser
 
 - Peer discovery via UDP broadcast (MNDP-style), with stable peer identity that survives DHCP IP changes
 - Direct encrypted chat with delivery acknowledgment (`sent` -> `delivered` / `failed`)
-- Hardened file transfer with offer/accept/reject, SHA-256 verification, atomic staging, and transfer resumption
+- Hardened file transfer with offer/accept/reject, SHA-256 verification, and atomic staging (resume helpers exist but are not yet wired into transfers)
 - Terminal UI built with Textual — peer list, chat log, and inline notifications
 - Mutual authenticated handshake: each device proves its Ed25519 identity before any message is exchanged
 - End-to-end encryption via ChaCha20-Poly1305 AEAD on all traffic
@@ -73,7 +73,7 @@ This prevents man-in-the-middle attacks and binds session keys to the exact obse
 
 Inbound files are written to a `.part` staging file. On completion, the received content is verified against the SHA-256 checksum declared in the original offer. If verification passes, the `.part` file is atomically renamed to the final destination path via `os.replace`. If it fails, the staging file is discarded.
 
-Transfers are resumable: if a `.part` file already exists, its size is reported back to the sender as the resume offset, and only the remaining bytes are streamed.
+Transfers are not resumable yet. When an offer is accepted, any existing `.part` file for that destination is deleted and the file is sent from the beginning, and a cancelled or failed transfer discards its `.part` file. The building blocks for resume exist and are unit-tested (`get_partial_bytes` in `core/transfer/resume.py` and the chunker's start-offset support), but `FileTransferSession` does not use them.
 
 ### Protocol
 
@@ -300,7 +300,7 @@ The full suite (minus benchmarks) also runs automatically in CI on every push to
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for phased progress and [`CHANGELOG.md`](CHANGELOG.md) for a full version history.
 
-Current version: **1.22.12** — Phase 38 (project structure) in progress: 38.13 mDNS receive-side fix.
+Current version: **1.22.13** — Phase 38 (project structure) complete (1.22.0-1.22.13).
 Phase 36 & 37 (Trust Center UX) complete,
 Phase 28-35 (Reliability program) underway: 28.1 (logging), 29/30.1
 (reliability taxonomy + task registry), 31.1 (performance baselines),

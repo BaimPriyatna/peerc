@@ -214,7 +214,7 @@ developer's `PYTHONPATH` mask missing package data.
 ## 9. As Built
 
 Phase 38 was implemented on the `phase-38-project-structure` branch as versions
-`1.22.0`-`1.22.12`, one per sub-step. The result follows this design, with the
+`1.22.0`-`1.22.13`, one per sub-step. The result follows this design, with the
 following recorded deviations and decisions.
 
 **Layout**
@@ -273,11 +273,13 @@ following recorded deviations and decisions.
   change on the branch and sits in its own commit (`1.22.12`) so it can be
   cherry-picked or reverted independently of the structural work.
 
-**Still open**
+**Decided at the end of the phase**
 
 - `docs/benchmarks/baseline.json` was recorded on a faster machine than the one
-  used to verify this phase; it was not re-baselined.
-- The README says transfers resume from an existing `.part` offset, but
-  `FileTransferSession` always sends from offset 0 (the resume helpers in
-  `core/transfer/` are not wired into the session). This predates Phase 38 and
-  needs a separate decision: correct the text or implement resume.
+  used to verify this phase. Owner decision: leave it as is. A same-machine A/B
+  of the baseline tag against the final tree showed no regression.
+- The README claimed that transfers resume from an existing `.part` offset. In
+  the code an accepted offer deletes any existing `.part` file and the sender
+  always streams from offset 0, so the README was corrected (1.22.13). The resume
+  building blocks in `core/transfer/` are unit-tested but not wired into
+  `FileTransferSession`; implementing resume would be separate feature work.
