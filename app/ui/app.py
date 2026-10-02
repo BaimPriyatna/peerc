@@ -515,6 +515,9 @@ class ChatApp(App):
         self.event_bus.subscribe(NetworkMessageReceived, self._on_network_message_handshake)
         self.event_bus.subscribe(SecurityWarning, self._on_security_warning)
         self.event_bus.subscribe(TrustRequired, self._on_trust_required)
+        # Phase 47.6: subscribe to TransferCompleted for resume-aware UI logging
+        from core.events import TransferCompleted
+        self.event_bus.subscribe(TransferCompleted, self._on_transfer_completed_event)
 
         await self.manager.start_server()
         self._discovery = discovery_broadcast.Discovery(
@@ -3182,8 +3185,19 @@ class ChatApp(App):
     # ---- file transfer callbacks ----
 
     async def _on_offer_received(self, transfer_id: str, filename: str, size: int, sender_name: str) -> bool:
-        self._log(f"[yellow]File offer from {rich_escape(sender_name)}: {rich_escape(filename)} ({size/1024:.1f} KB)[/yellow]")
-        accepted = await self.push_screen_wait(FileOfferModal(sender_name, filename, size))
+        # Phase 47.6 / §9: query resume offset from session
+        resume_offset = self.file_session.resume_offset_for(transfer_id)
+        
+        if resume_offset > 0:
+            resume_pct = (resume_offset / size * 100) if size > 0 else 0
+            self._log(
+                f"[yellow]File offer from {rich_escape(sender_name)}: {rich_escape(filename)} "
+                f"({size/1024:.1f} KB) — Resume from {resume_pct:.0f}%[/yellow]"
+            )
+        else:
+            self._log(f"[yellow]File offer from {rich_escape(sender_name)}: {rich_escape(filename)} ({size/1024:.1f} KB)[/yellow]")
+        
+        accepted = await self.push_screen_wait(FileOfferModal(sender_name, filename, size, resume_offset=resume_offset))
         self._log(f"[yellow]  -> {'accepted' if accepted else 'rejected'}[/yellow]")
         self._dequeue_next_trust_prompt()
         return bool(accepted)
@@ -3197,6 +3211,12 @@ class ChatApp(App):
             self._log(f"[green]File received: {filepath}[/green]")
         else:
             self._log(f"[red]File transfer {transfer_id[:8]} failed or was rejected[/red]")
+
+    async def _on_transfer_completed_event(self, evt: any) -> None:
+        """Phase 47.6 / §9: handle TransferCompleted event for resume-aware logging."""
+        if evt.direction == "received" and evt.success and evt.resumed_from > 0:
+            resume_pct = (evt.resumed_from / evt.size * 100) if evt.size > 0 else 0
+            self._log(f"[dim]  (resumed from {resume_pct:.0f}%)[/dim]")
 
     # ---- input handling ----
 

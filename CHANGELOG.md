@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.23.5] — Phase 47.6: UI resume support
+
+### Added
+- **`FileOfferModal(sender_name, filename, size, resume_offset=0)`**: Phase 47.6 / §9 — the file-offer dialog now accepts an optional `resume_offset` parameter. When `resume_offset > 0`, the dialog displays "Resume from X% (done of total KB)" below the file info, and the accept button reads "Resume" instead of "Accept". This makes it clear to the user that the transfer will continue from where it left off, not start over.
+- **`ChatApp._on_transfer_completed_event(evt)`**: Phase 47.6 / §9 — subscribes to `TransferCompleted` events and logs "(resumed from X%)" after a successful resumed transfer. This is in addition to the existing `on_complete` callback, which still logs the completion message. The event handler only logs the resume annotation for incoming transfers that were actually resumed (`evt.direction == "received"` and `evt.resumed_from > 0`).
+- **`tests/test_ui_resume.py`** [NEW] (5, unit): smoke tests for `FileOfferModal` with and without `resume_offset`, percentage calculation, zero-size edge case, and `resume_offset == size` (100% case). These are lightweight unit tests of the modal's data; visual/manual testing is done via the running Textual app.
+
+### Changed
+- **`ChatApp._on_offer_received`**: Phase 47.6 / §9 — now queries `self.file_session.resume_offset_for(transfer_id)` before showing the offer dialog and passes the offset to `FileOfferModal`. If the offset is greater than zero, the log message includes "— Resume from X%" before the user sees the modal. This makes the resume visible in the chat log as well as the dialog.
+- **`ChatApp` event bus wiring**: subscribes to `TransferCompleted` in addition to the existing events (`NetworkMessageReceived`, `SecurityWarning`, `TrustRequired`). This allows the app to react to transfer completion with resume-aware logging without changing the `on_complete` callback signature, which is still used by other code paths.
+
+### Tested
+- **Manual visual testing**: not automated, but the following flows were verified by running the Textual app:
+  1. Fresh offer: dialog shows "Accept", log shows normal offer message.
+  2. Resumed offer: dialog shows "Resume from 50%", button reads "Resume", log shows "Resume from 50%".
+  3. Completion: log shows "File received: <path>" followed by "(resumed from 50%)".
+  4. Reject with partial: partial is deleted (per 47.4 retention policy).
+- **Unit tests**: 5 smoke tests for `FileOfferModal` data correctness all pass.
+- **Full suite**: 971 passed, 1 skipped, 7 deselected (was 966). The 5 new tests in `test_ui_resume.py` all pass. Two benchmark tests on Windows remain broken (pre-existing `resource` module issue, not related to this phase).
+
+### Notes
+- Progress bar already starts from the resumed percentage automatically because `_on_transfer_progress` receives `done` bytes from the session, which already accounts for `resume_offset` (implemented in 47.5).
+- The "sender did not resume" message (restart detection from 47.4 / §6) is already logged by `FileTransferSession` at INFO level, so it appears in the application logs but not in the chat UI unless the user has verbose logging enabled.
+
 ## [1.23.4] — Phase 47.5: Sender resume implementation
 
 ### Added
