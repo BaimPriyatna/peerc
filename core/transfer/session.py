@@ -18,6 +18,7 @@ Hardened per Phases 12–20:
 """
 
 import asyncio
+import logging
 import os
 import shutil
 import time
@@ -40,6 +41,15 @@ from core.transfer import (
     resolve_safe_dest_path,
     sha256_file,
 )
+from core.transfer.partial import (
+    COMMIT_INTERVAL,
+    discard,
+    find_resumable,
+    meta_path_for,
+    resume_offset_for,
+    sweep_expired,
+    write_meta,
+)
 from core.transport.manager import ConnectionManager
 from core.app_errors import log_not_applied, parse_or_log
 from core.protocol import ErrorCode
@@ -52,6 +62,7 @@ from core.transfer_state import (
 )
 
 CHUNK_SIZE = DEFAULT_CHUNK_SIZE  # 64 KB per chunk
+logger = logging.getLogger("peerc.transfer")
 
 # Phase 35.2: remember the last N (peer, code, transfer) errors already
 # reported so a peer streaming chunks at a transfer we no longer have
@@ -77,6 +88,7 @@ class OutgoingTransfer:
     filename: str
     size: int
     checksum: str
+    peer_device_id: str = ""
     # Phase 34.1: guarded state machine (OFFERED -> WAITING_FOR_ACCEPT ->
     # SENDING -> WAITING_FOR_COMPLETE_ACK -> COMPLETED/FAILED/REJECTED/
     # CANCELLED) replaces what used to be a free-form status string
@@ -96,8 +108,12 @@ class IncomingTransfer:
     sender_name: str
     dest_path: str
     part_path: str = ""
+    peer_device_id: str = ""
     bytes_received: int = 0
     expected_chunk_index: int = 0
+    resume_offset: int = 0
+    last_committed: int = 0
+    _first_chunk_received: bool = False
     # Phase 34.1: guarded state machine (OFFERED -> ACCEPTED -> RECEIVING
     # -> VERIFYING -> COMPLETED, with PAUSED/RESUMING modeled for a
     # future resume feature) — see RELIABILITY_DESIGN.md §6.2.
@@ -132,15 +148,112 @@ class FileTransferSession:
 
         self._outgoing: dict[str, OutgoingTransfer] = {}
         self._incoming: dict[str, IncomingTransfer] = {}
+        self._offer_resume_offsets: dict[str, int] = {}
         self._reported_errors: "OrderedDict[tuple, None]" = OrderedDict()
 
+        # Phase 47.4 / §8: sweep expired partials (> 7 days with valid sidecar) at startup
+        sweep_expired(self.downloads_dir)
+
         if self.event_bus:
-            from core.events import NetworkMessageReceived
+            from core.events import NetworkMessageReceived, PeerDisconnected
             self.event_bus.subscribe(NetworkMessageReceived, self._on_network_message)
+            self.event_bus.subscribe(PeerDisconnected, self._on_peer_disconnected)
         else:
             # Chain onto whatever dispatcher is already set (e.g. ChatSession's) — legacy fallback.
             self._next_on_message = manager.on_message
             manager.on_message = self._dispatch
+
+    def resume_offset_for(self, transfer_id: str) -> int:
+        """Phase 47.4 / §9: return the resume offset for an offer or incoming transfer."""
+        if transfer_id in self._incoming:
+            return self._incoming[transfer_id].resume_offset
+        return self._offer_resume_offsets.get(transfer_id, 0)
+
+    def _on_peer_disconnected(self, evt: Any) -> None:
+        addr_key = getattr(evt, "addr_key", None)
+        peer_id = getattr(evt, "peer_id", None)
+        if addr_key:
+            self.handle_connection_lost(addr_key, peer_device_id=peer_id)
+
+    def handle_connection_lost(self, addr_key: str, peer_device_id: Optional[str] = None) -> None:
+        """Phase 47.4 / §8: handle transport disconnect for all transfers with addr_key.
+
+        For each incoming transfer: flushes and fsyncs, records committed in the
+        sidecar, closes the file handle, moves to FAILED with error 'connection_lost',
+        and keeps both the .part file and sidecar.
+        For each outgoing transfer: fails with 'connection_lost'.
+        """
+        matching_incoming = [t for t in self._incoming.values() if t.addr_key == addr_key]
+        for transfer in matching_incoming:
+            self._incoming.pop(transfer.transfer_id, None)
+            self._offer_resume_offsets.pop(transfer.transfer_id, None)
+            if transfer._file_handle:
+                try:
+                    transfer._file_handle.flush()
+                    os.fsync(transfer._file_handle.fileno())
+                except OSError:
+                    pass
+                try:
+                    transfer._file_handle.close()
+                except OSError:
+                    pass
+                transfer._file_handle = None
+
+            committed = transfer.bytes_received - (transfer.bytes_received % CHUNK_SIZE)
+            getter = getattr(self.manager, "get_peer_device_id", None)
+            dev_id = transfer.peer_device_id or peer_device_id or (getter(transfer.addr_key) if callable(getter) else None)
+            if dev_id and transfer.part_path and os.path.exists(transfer.part_path):
+                try:
+                    write_meta(
+                        transfer.part_path,
+                        peer_device_id=dev_id,
+                        filename=transfer.filename,
+                        size=transfer.size,
+                        checksum=transfer.expected_checksum,
+                        dest_name=os.path.basename(transfer.dest_path),
+                        committed=committed,
+                    )
+                except Exception:
+                    pass
+
+            try:
+                transfer.state.transition_to(IncomingTransferState.FAILED)
+            except InvalidTransferTransition:
+                pass
+            # Kept per Section 8: no discard / cleanup_part_file
+            self._notify_complete(transfer, False, None, error="connection_lost")
+
+        matching_outgoing = [t for t in self._outgoing.values() if t.addr_key == addr_key]
+        for transfer in matching_outgoing:
+            self._fail_outgoing(transfer, "connection_lost")
+
+    def _checkpoint_incoming(self, transfer: IncomingTransfer) -> None:
+        """Phase 47.4 / §5: flush + fsync data to disk and advance committed in sidecar."""
+        if not transfer._file_handle:
+            return
+        getter = getattr(self.manager, "get_peer_device_id", None)
+        peer_device_id = transfer.peer_device_id or (getter(transfer.addr_key) if callable(getter) else None)
+        if not peer_device_id or not transfer.part_path:
+            return
+        try:
+            transfer._file_handle.flush()
+            os.fsync(transfer._file_handle.fileno())
+        except OSError:
+            return
+        committed = transfer.bytes_received - (transfer.bytes_received % CHUNK_SIZE)
+        transfer.last_committed = committed
+        try:
+            write_meta(
+                transfer.part_path,
+                peer_device_id=peer_device_id,
+                filename=transfer.filename,
+                size=transfer.size,
+                checksum=transfer.expected_checksum,
+                dest_name=os.path.basename(transfer.dest_path),
+                committed=committed,
+            )
+        except Exception:
+            pass
 
     async def _on_network_message(self, evt: Any) -> None:
         msg_type = evt.message.get("type")
@@ -212,14 +325,36 @@ class FileTransferSession:
         except InvalidTransferTransition:
             return False
         self._incoming.pop(transfer.transfer_id, None)
+        self._offer_resume_offsets.pop(transfer.transfer_id, None)
         if transfer._file_handle:
+            try:
+                transfer._file_handle.flush()
+                os.fsync(transfer._file_handle.fileno())
+            except OSError:
+                pass
             try:
                 transfer._file_handle.close()
             except OSError:
                 pass
             transfer._file_handle = None
-        if transfer.part_path and os.path.exists(transfer.part_path):
-            cleanup_part_file(transfer.part_path)
+
+        committed = transfer.bytes_received - (transfer.bytes_received % CHUNK_SIZE)
+        getter = getattr(self.manager, "get_peer_device_id", None)
+        peer_device_id = transfer.peer_device_id or (getter(transfer.addr_key) if callable(getter) else None)
+        if peer_device_id and transfer.part_path and os.path.exists(transfer.part_path):
+            try:
+                write_meta(
+                    transfer.part_path,
+                    peer_device_id=peer_device_id,
+                    filename=transfer.filename,
+                    size=transfer.size,
+                    checksum=transfer.expected_checksum,
+                    dest_name=os.path.basename(transfer.dest_path),
+                    committed=committed,
+                )
+            except Exception:
+                pass
+        # Phase 47.4 / §8: peer-reported terminal error keeps the partial and sidecar
         self._notify_complete(transfer, False, None, error=error)
         return True
 
@@ -275,6 +410,9 @@ class FileTransferSession:
         if self.event_bus:
             from core.events import TransferCompleted
             is_outgoing = isinstance(transfer, OutgoingTransfer)
+            getter = getattr(self.manager, "get_peer_device_id", None)
+            peer_device_id = getattr(transfer, "peer_device_id", "") or (getter(transfer.addr_key) if callable(getter) else None)
+            resumed_from = getattr(transfer, "resume_offset", 0) if not is_outgoing else 0
             self.event_bus.post(
                 TransferCompleted(
                     transfer_id=transfer.transfer_id,
@@ -282,12 +420,13 @@ class FileTransferSession:
                     filepath=filepath,
                     error=error,
                     addr_key=transfer.addr_key,
-                    peer_device_id=self.manager.get_peer_device_id(transfer.addr_key),
+                    peer_device_id=peer_device_id,
                     direction="sent" if is_outgoing else "received",
                     filename=transfer.filename,
                     size=transfer.size,
                     checksum=transfer.checksum if is_outgoing else transfer.expected_checksum,
                     timestamp=time.time(),
+                    resumed_from=resumed_from,
                 )
             )
         if self.on_complete:
@@ -302,9 +441,12 @@ class FileTransferSession:
         filename = os.path.basename(filepath)
         transfer_id = str(uuid.uuid4())
 
+        getter = getattr(self.manager, "get_peer_device_id", None)
+        peer_device_id = getter(addr_key) if callable(getter) else ""
         transfer = OutgoingTransfer(
             transfer_id=transfer_id, addr_key=addr_key, filepath=filepath,
             filename=filename, size=size, checksum=checksum,
+            peer_device_id=peer_device_id or "",
         )
 
         offer = protocol.make_file_offer(
@@ -417,22 +559,83 @@ class FileTransferSession:
         checksum = message["checksum"]
         sender_name = message.get("sender_name") or "peer"
 
+        # Phase 47.4 / §8: sweep expired partials (> 7 days) on every offer
+        sweep_expired(self.downloads_dir)
+
         # BUG-002: reject oversized offers before ever asking the user.
         if size > MAX_INCOMING_FILE_SIZE:
             await self.manager.send(addr_key, protocol.make_file_reject(transfer_id))
             return
 
-        # Phase 20: Disk space pre-check
-        if not check_disk_space(self.downloads_dir, size):
+        # Phase 47.4 / §5: Busy partial hazard check — if an active incoming transfer
+        # is already receiving this file from this peer, reject immediately rather than touching it.
+        for active in self._incoming.values():
+            if active.addr_key == addr_key and active.filename == filename:
+                await self.manager.send(addr_key, protocol.make_file_reject(transfer_id))
+                return
+
+        # Phase 47.4 / §5: check for an authenticated match in partial downloads
+        getter = getattr(self.manager, "get_peer_device_id", None)
+        peer_device_id = getter(addr_key) if callable(getter) else None
+
+        partial_info = None
+        resume_offset = 0
+
+        if peer_device_id:
+            info = find_resumable(
+                self.downloads_dir,
+                peer_device_id=peer_device_id,
+                filename=filename,
+                size=size,
+                checksum=checksum,
+            )
+            if info is not None:
+                # If a live incoming transfer holds this partial, reject rather than touching it
+                if any(active.part_path == info.part_path for active in self._incoming.values()):
+                    await self.manager.send(addr_key, protocol.make_file_reject(transfer_id))
+                    return
+
+                offset = resume_offset_for(info, chunk_size=CHUNK_SIZE)
+                if offset > 0:
+                    try:
+                        dest_path = resolve_safe_dest_path(
+                            info.dest_name, self.downloads_dir, allow_existing_part=True
+                        )
+                        if os.path.basename(dest_path) == info.dest_name:
+                            partial_info = info
+                            resume_offset = offset
+                        else:
+                            discard(info.part_path)
+                    except TransferSecurityError:
+                        discard(info.part_path)
+                else:
+                    discard(info.part_path)
+
+        if partial_info is not None:
+            dest_path = os.path.join(self.downloads_dir, partial_info.dest_name)
+            part_path = partial_info.part_path
+        else:
+            try:
+                dest_path = self._safe_dest_path(filename)
+            except PathTraversalError:
+                await self.manager.send(addr_key, protocol.make_file_reject(transfer_id))
+                return
+            part_path = get_part_path(dest_path)
+
+        # Phase 47.4 / §5: busy partial hazard check — if a live incoming transfer
+        # already holds the partial's path, a second offer for it is rejected rather than touching it.
+        for active in self._incoming.values():
+            if active.part_path == part_path or active.dest_path == dest_path:
+                await self.manager.send(addr_key, protocol.make_file_reject(transfer_id))
+                return
+
+        # Phase 47.4 / §5: disk-space pre-check using remaining bytes
+        needed_bytes = size - resume_offset
+        if not check_disk_space(self.downloads_dir, needed_bytes):
             await self.manager.send(addr_key, protocol.make_file_reject(transfer_id))
             return
 
-        # BUG-001 / Phase 13: resolve safe destination path
-        try:
-            dest_path = self._safe_dest_path(filename)
-        except PathTraversalError:
-            await self.manager.send(addr_key, protocol.make_file_reject(transfer_id))
-            return
+        self._offer_resume_offsets[transfer_id] = resume_offset
 
         if self.event_bus:
             from core.events import FileOffered
@@ -453,22 +656,66 @@ class FileTransferSession:
             accept = await self.on_offer_received(transfer_id, filename, size, sender_name)
 
         if not accept:
+            self._offer_resume_offsets.pop(transfer_id, None)
+            if partial_info is not None:
+                discard(partial_info.part_path)
             await self.manager.send(addr_key, protocol.make_file_reject(transfer_id))
             return
 
-        part_path = get_part_path(dest_path)
-        cleanup_part_file(part_path)
+        self._offer_resume_offsets.pop(transfer_id, None)
 
         incoming = IncomingTransfer(
             transfer_id=transfer_id, addr_key=addr_key, filename=filename,
             size=size, expected_checksum=checksum, sender_name=sender_name,
             dest_path=dest_path, part_path=part_path,
+            peer_device_id=peer_device_id or "",
+            resume_offset=resume_offset,
+            bytes_received=resume_offset,
+            expected_chunk_index=resume_offset // CHUNK_SIZE,
+            last_committed=resume_offset,
+            _first_chunk_received=(resume_offset == 0),
         )
-        incoming._file_handle = open(part_path, "wb")
+
+        if resume_offset > 0:
+            try:
+                handle = open(part_path, "r+b")
+                handle.seek(resume_offset)
+                handle.truncate(resume_offset)
+                incoming._file_handle = handle
+            except OSError:
+                discard(part_path)
+                resume_offset = 0
+                incoming.resume_offset = 0
+                incoming.bytes_received = 0
+                incoming.expected_chunk_index = 0
+                incoming.last_committed = 0
+                incoming._first_chunk_received = True
+                handle = open(part_path, "wb")
+                incoming._file_handle = handle
+        else:
+            discard(part_path)
+            incoming._file_handle = open(part_path, "wb")
+
+        if peer_device_id:
+            try:
+                write_meta(
+                    part_path,
+                    peer_device_id=peer_device_id,
+                    filename=filename,
+                    size=size,
+                    checksum=checksum,
+                    dest_name=os.path.basename(dest_path),
+                    committed=resume_offset,
+                )
+            except Exception:
+                pass
+
         incoming.state.transition_to(IncomingTransferState.ACCEPTED)
         self._incoming[transfer_id] = incoming
 
-        await self.manager.send(addr_key, protocol.make_file_accept(transfer_id))
+        await self.manager.send(
+            addr_key, protocol.make_file_accept(transfer_id, resume_offset=resume_offset)
+        )
 
     def _safe_dest_path(self, filename: str) -> str:
         return resolve_safe_dest_path(filename, self.downloads_dir)
@@ -499,6 +746,48 @@ class FileTransferSession:
 
         sequence = message["sequence"]
         offset = message["offset"]
+
+        # Phase 47.4 / §6: restart detection (old sender or ignored offset)
+        if transfer.resume_offset > 0 and not transfer._first_chunk_received:
+            transfer._first_chunk_received = True
+            if sequence == transfer.expected_chunk_index and offset == transfer.bytes_received:
+                pass
+            elif sequence == 0 and offset == 0:
+                logger.info(
+                    "Sender did not resume transfer %s; restarting from beginning",
+                    transfer.transfer_id,
+                )
+                try:
+                    transfer._file_handle.seek(0)
+                    transfer._file_handle.truncate(0)
+                except OSError:
+                    await self._abort_incoming(transfer, "os_error")
+                    return
+                transfer.bytes_received = 0
+                transfer.expected_chunk_index = 0
+                transfer.resume_offset = 0
+                transfer.last_committed = 0
+                getter = getattr(self.manager, "get_peer_device_id", None)
+                peer_device_id = getter(transfer.addr_key) if callable(getter) else None
+                if peer_device_id:
+                    try:
+                        write_meta(
+                            transfer.part_path,
+                            peer_device_id=peer_device_id,
+                            filename=transfer.filename,
+                            size=transfer.size,
+                            checksum=transfer.expected_checksum,
+                            dest_name=os.path.basename(transfer.dest_path),
+                            committed=0,
+                        )
+                    except Exception:
+                        pass
+            else:
+                await self._abort_incoming(transfer, "out-of-order chunk")
+                return
+        else:
+            transfer._first_chunk_received = True
+
         if sequence != transfer.expected_chunk_index or offset != transfer.bytes_received:
             await self._abort_incoming(transfer, "out-of-order chunk")
             return
@@ -513,18 +802,22 @@ class FileTransferSession:
         transfer.bytes_received += len(data)
         transfer.expected_chunk_index += 1
 
+        if transfer.bytes_received - transfer.last_committed >= COMMIT_INTERVAL:
+            self._checkpoint_incoming(transfer)
+
         self._notify_progress(transfer.transfer_id, transfer.bytes_received, transfer.size, is_upload=False)
 
     async def _abort_incoming(self, transfer: "IncomingTransfer", reason: str) -> None:
         self._incoming.pop(transfer.transfer_id, None)
+        self._offer_resume_offsets.pop(transfer.transfer_id, None)
         if transfer._file_handle:
             try:
                 transfer._file_handle.close()
             except OSError:
                 pass
             transfer._file_handle = None
-        if transfer.part_path and os.path.exists(transfer.part_path):
-            cleanup_part_file(transfer.part_path)
+        if transfer.part_path:
+            discard(transfer.part_path)
         if os.path.exists(transfer.dest_path):
             try:
                 os.remove(transfer.dest_path)
@@ -558,8 +851,12 @@ class FileTransferSession:
             await self._report_once(addr_key, ErrorCode.INVALID_STATE, message.get("transfer_id"))
             return
         self._incoming.pop(transfer.transfer_id, None)
+        self._offer_resume_offsets.pop(transfer.transfer_id, None)
         if transfer._file_handle:
-            transfer._file_handle.close()
+            try:
+                transfer._file_handle.close()
+            except OSError:
+                pass
             transfer._file_handle = None
 
         actual_checksum = sha256_file(transfer.part_path)
@@ -573,12 +870,14 @@ class FileTransferSession:
 
         if not success:
             transfer.state.transition_to(IncomingTransferState.FAILED)
-            cleanup_part_file(transfer.part_path)
+            discard(transfer.part_path)
             self._notify_complete(transfer, False, None, error="checksum_mismatch")
             return
 
         # Atomically rename .part to final dest_path
         finalize_part_file(transfer.part_path, transfer.dest_path)
+        # Phase 47.4: clean up sidecar metadata on success
+        discard(transfer.part_path)
 
         transfer.state.transition_to(IncomingTransferState.COMPLETED)
         self._notify_complete(transfer, True, transfer.dest_path)

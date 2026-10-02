@@ -308,7 +308,8 @@ async def test_terminal_error_fails_an_incoming_transfer_and_cleans_up_without_r
 
     assert incoming.state.state is IncomingTransferState.FAILED
     assert "t-in" not in ft._incoming
-    assert not os.path.exists(part)
+    # Phase 47.4 / §8: peer-reported terminal error keeps the partial
+    assert os.path.exists(part)
     assert notified == [("t-in", False, "transfer_expired")]
     assert manager.sent == []
 

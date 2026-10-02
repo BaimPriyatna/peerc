@@ -45,7 +45,9 @@ def check_disk_space(
         return True  # fallback if OS does not support disk_usage
 
 
-def resolve_safe_dest_path(filename: str, downloads_dir: str) -> str:
+def resolve_safe_dest_path(
+    filename: str, downloads_dir: str, allow_existing_part: bool = False
+) -> str:
     """Turn a remote-supplied filename into a safe, unique path inside downloads_dir."""
     name = os.path.basename(filename.replace("\\", "/")).strip()
     if not name or name in (".", ".."):
@@ -56,7 +58,9 @@ def resolve_safe_dest_path(filename: str, downloads_dir: str) -> str:
     candidate = os.path.join(downloads_dir, name)
 
     counter = 1
-    while os.path.exists(candidate) or os.path.exists(get_part_path(candidate)):
+    while os.path.exists(candidate) or (
+        not allow_existing_part and os.path.exists(get_part_path(candidate))
+    ):
         candidate = os.path.join(downloads_dir, f"{base} ({counter}){ext}")
         counter += 1
 

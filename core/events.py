@@ -150,6 +150,7 @@ class TransferCompleted(Event):
     size: int = 0
     checksum: str = ""
     timestamp: float = 0.0
+    resumed_from: int = 0
 
 
 @dataclass
