@@ -71,7 +71,9 @@ without the receiver's cooperation; verifying a prefix hash before resuming
 - Omitted or `0` means "send from the beginning". `make_file_accept(transfer_id,
   resume_offset=0)` adds the field only when it is greater than zero, so the
   message for a fresh transfer is byte-identical to today's.
-- Validation: if present it must be an `int` (not `bool`) and `>= 0`.
+- Validation: if present it must be an `int` (not `bool`) and `>= 0`; anything else is a
+  malformed message and a `ProtocolError`, like `file_offer.size`. A well-formed value that the
+  sender cannot honor is not an error: the sender ignores it (section 7).
   `PROTOCOL_VERSION` is unchanged: the field is optional and ignorable.
 - The offset is always a multiple of `CHUNK_SIZE` (the receiver aligns it, see
   section 5). The first resumed chunk therefore has
@@ -233,8 +235,9 @@ zero" button; a cap on total retained partial bytes.
 4. Protocol violations by the sender delete the partial; peer-reported terminal
    errors keep it.
 5. A second offer for a partial held by a live transfer is rejected.
-6. An invalid `resume_offset` is ignored by the sender (full send) instead of
-   being a protocol error.
+6. A well-formed but unusable `resume_offset` (out of range or not chunk-aligned) is
+   ignored by the sender (full send) instead of being a protocol error; a malformed
+   one (wrong type, negative) is a protocol error.
 7. No prefix-hash verification in this phase.
 8. 64 KiB alignment of the resume offset.
 9. Expiry sweep on each offer and at startup, only for `.part` files that have a

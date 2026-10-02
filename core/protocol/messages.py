@@ -8,7 +8,8 @@ Message types:
     chat              - a plain text chat message
     chat_ack          - acknowledges receipt of a chat message (Stage 3)
     file_offer        - proposes a file transfer (Stage 4)
-    file_accept       - accepts a pending file offer (Stage 4)
+    file_accept       - accepts a pending file offer (Stage 4); may carry an
+                        optional resume_offset (Phase 47)
     file_reject       - rejects a pending file offer (Stage 4)
     file_chunk        - one chunk of file data (Stage 4)
     file_done         - signals file transfer complete + checksum (Stage 4)
@@ -81,13 +82,25 @@ def make_file_offer(
     }
 
 
-def make_file_accept(transfer_id: str) -> dict:
-    return {
+def make_file_accept(transfer_id: str, resume_offset: int = 0) -> dict:
+    """Accept a file offer.
+
+    `resume_offset` (Phase 47) asks the sender to continue from that byte
+    instead of the beginning. It is only added when greater than zero, so the
+    message for a fresh transfer is identical to the one older peers send and
+    expect; a peer that does not know the field ignores it.
+    """
+    if not isinstance(resume_offset, int) or isinstance(resume_offset, bool) or resume_offset < 0:
+        raise ValueError("resume_offset must be a non-negative int")
+    message = {
         "type": "file_accept",
         "version": PROTOCOL_VERSION,
         "transfer_id": transfer_id,
         "timestamp": time.time(),
     }
+    if resume_offset:
+        message["resume_offset"] = resume_offset
+    return message
 
 
 def make_file_reject(transfer_id: str) -> dict:
@@ -665,6 +678,11 @@ def validate_message(message) -> dict:
             raise ProtocolError("file_offer.size must be a non-negative int")
         if not isinstance(message["checksum"], str) or not message["checksum"]:
             raise ProtocolError("file_offer.checksum must be a non-empty string")
+
+    if msg_type == "file_accept" and "resume_offset" in message:
+        offset = message["resume_offset"]
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            raise ProtocolError("file_accept.resume_offset must be a non-negative int")
 
     if msg_type == "file_chunk":
         if not isinstance(message["chunk_index"], int) or message["chunk_index"] < 0:

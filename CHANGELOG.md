@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.23.2] — Phase 47.3: Optional resume_offset in file_accept
+
+### Added
+- **`make_file_accept(transfer_id, resume_offset=0)`** (`core/protocol/messages.py`): the optional field a receiver will use to ask a sender to continue from a byte offset. It is added **only when greater than zero**, so the `file_accept` for a fresh transfer is identical to what older peers send and expect. The builder refuses values that would make a malformed message (negative, `bool`, non-int).
+- **`validate_message`** rejects a malformed `file_accept.resume_offset` (not an `int`, a `bool`, or negative) with a `ProtocolError`, like `file_offer.size`. `REQUIRED_FIELDS['file_accept']` is still just `transfer_id` and `PROTOCOL_VERSION` is unchanged, so an older peer, which validates required fields only, accepts and ignores the new field. A well-formed value the sender cannot honor is not a protocol error; the sender will simply ignore it (47.5). No transfer-session behavior changes in this step: `FileTransferSession` still builds `file_accept` without an offset and does not read one.
+- **`tests/test_file_resume_protocol.py`** [NEW] (29, unit): legacy-shape equality for a fresh accept, the offset round trip through JSON, builder and validator rejection of malformed values, acceptance of any non-negative `int`, the property old peers rely on (`transfer_id` stays the only required field), and that other message types are untouched. Four deliberate breakages (validator not checking, accepting `bool`, always adding the field, allowing negatives) were each caught.
+- **`docs/FILE_RESUME_DESIGN.md`**: clarified that a *malformed* offset is a protocol error while a *well-formed but unusable* one is ignored by the sender (sections 4 and 12, item 6).
+- **Full suite**: 943 passed, 1 skipped, 7 deselected (was 914).
+
 ## [1.23.1] — Phase 47.2: Partial download store
 
 ### Added
