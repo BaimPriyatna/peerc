@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.23.1] — Phase 47.2: Partial download store
+
+### Added
+- **`core/transfer/partial.py`** [NEW]: the sidecar store from `FILE_RESUME_DESIGN.md` sections 5 and 8. `write_meta` writes `<dest>.part.meta` atomically (temp file + `os.replace`, mode 0600); `read_meta` validates it defensively (4 KiB cap, schema and type checks, SHA-256 shape, plain file names only, the sidecar must describe the `.part` beside it, symlinks refused); `find_resumable` matches an offer on authenticated peer, filename, size **and** checksum and needs a real regular `.part`; `resume_offset_for` trusts only `min(committed, real size)` rounded down to a 64 KiB chunk, so bytes beyond `committed` after a crash are never trusted; `discard`; and `sweep_expired`, which removes only partials that have a valid sidecar and are older than 7 days. Constants: `COMMIT_INTERVAL` 4 MiB, `PARTIAL_MAX_AGE_SECONDS` 7 days. Not connected to the transfer session yet, so there is no behavior change.
+- **`tests/test_partial.py`** [NEW] (68, unit): round trip, 0600 permissions, atomic replace with no temp files left, rejection of malformed and hostile sidecars (wrong types, bad checksums, `committed > size`, path-escaping names, oversized, non-JSON, symlinks), exact four-field matching, newest-wins, resume-offset alignment and clamping, and expiry (including that an orphan `.part` or an unreadable sidecar is never deleted and that a clock-skewed future timestamp does not expire).
+- **Mutation checks**: four deliberate breakages of `partial.py` (a loosened name rule, trusting the sidecar without comparing the real file size, a sweep that deletes orphan `.part` files, matching without the checksum) were each caught. The first one initially survived: the hostile-name tests were being rejected by the part-file consistency check, so the name rule itself was untested. It now has direct tests, including a POSIX case where only the name rule can reject the sidecar.
+- **Full suite**: 914 passed, 1 skipped, 7 deselected (was 846).
+
 ## [1.23.0] — Phase 47.1: File transfer resume design
 
 ### Added

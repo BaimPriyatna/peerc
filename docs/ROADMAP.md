@@ -161,6 +161,7 @@ endpoint_update.py` for the shape to copy.
 | `1.22.12` | 38.13 | Phase 38.13: mDNS receive-side fix — mDNS receive side fixed: the listener resolves services with `AsyncServiceInfo.async_request` in a task instead of the blocking `ServiceInfo.request`; verified over real mDNS on zeroconf 0.131.0 and 0.151.5; `tests/test_mdns_listener.py` (8). Only functional change on the branch. |
 | `1.22.13` | 38.14 | Phase 38.14: README resume claim — README no longer claims that transfers resume (they restart from offset 0; resume helpers exist but are not wired in); Phase 38 marked complete. |
 | `1.23.0` | 47.1 | Phase 47.1: File transfer resume design — `FILE_RESUME_DESIGN.md` (resolved with Baim: automatic on re-offer, backward compatible via an optional `resume_offset` in `file_accept`, `.part` kept on loss/failure and deleted on reject, hash mismatch or after 7 days). Documentation only. |
+| `1.23.1` | 47.2 | Phase 47.2: Partial download store — `core/transfer/partial.py`: validated `.part.meta` sidecar store (atomic write, defensive read, exact-match lookup, safe resume offset, discard, 7-day expiry) with 68 tests; not wired into the session yet. |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -368,8 +369,8 @@ numeric phase order in the plan doc:
 5. **Phase 38 — Project structure final** (complete; design and as-built notes in
    `PROJECT_STRUCTURE_DESIGN.md`; steps: 38.2 `1.22.0`, 38.3 `1.22.1`, 38.4 `1.22.2`, 38.5 `1.22.3`, 38.6a `1.22.4`, 38.6b `1.22.5`, 38.7 `1.22.6`, 38.8 `1.22.7`, 38.9 `1.22.8`, 38.10 `1.22.9`, 38.11 `1.22.10`, 38.12 `1.22.11`, 38.13 `1.22.12`, 38.14 `1.22.13`)
 6. Security audit, release
-6. **Phase 47 — File transfer resume** (design resolved in `FILE_RESUME_DESIGN.md`:
-   47.1 `1.23.0`; implementation 47.2-47.7 pending)
+6. **Phase 47 — File transfer resume** (design in `FILE_RESUME_DESIGN.md`;
+   in progress: 47.1 `1.23.0`, 47.2 `1.23.1`)
 
 ## Phase 38 — Project Structure
 

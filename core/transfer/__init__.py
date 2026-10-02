@@ -7,6 +7,7 @@ Modules:
     receiver.py — Inbound receiver validating disk space, bounds, and checksum (Phases 13-17, 20).
     sender.py   — Outbound sender streaming chunks and awaiting ack (Phases 12, 16, 19).
     manager.py  — FileTransferManager coordinating transfers and resource limits (Phases 12, 20).
+    partial.py  — .part.meta sidecars that identify a resumable partial download (Phase 47).
     session.py  — FileTransferSession: the high-level offer/accept/chunk/done workflow over a
                   ConnectionManager (Phase 38; moved from the root file_transfer.py).
 """
