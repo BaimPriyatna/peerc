@@ -1,6 +1,6 @@
 # File Transfer Resume (Phase 47)
 
-Status: **design resolved, not yet implemented.** Written before any code, per
+Status: **complete (v1.23.0–1.23.5).** Written before any code, per
 the project rule for large features (see `ROADMAP.md`, "Phase 45/46 design
 (resolved)"). The owner's three product decisions are in section 1; the
 remaining choices are mine and are listed in section 12 for review before

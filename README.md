@@ -35,7 +35,7 @@ A terminal-based peer-to-peer chat and file transfer application. No central ser
 
 - Peer discovery via UDP broadcast (MNDP-style), with stable peer identity that survives DHCP IP changes
 - Direct encrypted chat with delivery acknowledgment (`sent` -> `delivered` / `failed`)
-- Hardened file transfer with offer/accept/reject, SHA-256 verification, and atomic staging (resume helpers exist but are not yet wired into transfers)
+- **Resumable file transfer** with offer/accept/reject, SHA-256 verification, atomic staging, and automatic resume from interruption (Phase 47)
 - Terminal UI built with Textual — peer list, chat log, and inline notifications
 - Mutual authenticated handshake: each device proves its Ed25519 identity before any message is exchanged
 - End-to-end encryption via ChaCha20-Poly1305 AEAD on all traffic
@@ -71,9 +71,9 @@ This prevents man-in-the-middle attacks and binds session keys to the exact obse
 
 ### File Transfer
 
-Inbound files are written to a `.part` staging file. On completion, the received content is verified against the SHA-256 checksum declared in the original offer. If verification passes, the `.part` file is atomically renamed to the final destination path via `os.replace`. If it fails, the staging file is discarded.
+Inbound files are written to a `.part` staging file and checkpointed every 4 MiB with fsync. On completion, the received content is verified against the SHA-256 checksum declared in the original offer. If verification passes, the `.part` file is atomically renamed to the final destination path via `os.replace`. If it fails, the staging file is discarded.
 
-Transfers are not resumable yet. When an offer is accepted, any existing `.part` file for that destination is deleted and the file is sent from the beginning, and a cancelled or failed transfer discards its `.part` file. The building blocks for resume exist and are unit-tested (`get_partial_bytes` in `core/transfer/resume.py` and the chunker's start-offset support), but `FileTransferSession` does not use them.
+**Resumable transfers** (Phase 47): When a connection drops mid-transfer, the partial download is kept (with a `.part.meta` sidecar) and bound to the authenticated sender's device ID. When the same peer re-offers the same file (matching filename, size, and checksum), the receiver automatically requests resumption from the last committed offset via an optional `resume_offset` field in `file_accept`. The sender honors it if valid (aligned to 64 KiB chunk boundaries), or ignores it and restarts from zero, which the receiver detects and handles cleanly. Old peers that don't understand `resume_offset` are backward compatible: they ignore the field and send from the beginning, and the receiver's restart detection truncates the `.part` and continues without error. Partial downloads older than 7 days are automatically expired.
 
 ### Protocol
 
@@ -300,7 +300,7 @@ The full suite (minus benchmarks) also runs automatically in CI on every push to
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for phased progress and [`CHANGELOG.md`](CHANGELOG.md) for a full version history.
 
-Current version: **1.23.2** — Phase 47 (file transfer resume) in progress: 47.3 Optional resume_offset in file_accept; Phase 38 (project structure) complete.
+Current version: **1.23.5** — Phase 47 (file transfer resume) complete: automatic resume from interruption with backward compatibility, sidecar metadata, restart detection, and 7-day expiry; Phase 38 (project structure) complete.
 Phase 36 & 37 (Trust Center UX) complete,
 Phase 28-35 (Reliability program) underway: 28.1 (logging), 29/30.1
 (reliability taxonomy + task registry), 31.1 (performance baselines),

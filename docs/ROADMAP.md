@@ -163,6 +163,10 @@ endpoint_update.py` for the shape to copy.
 | `1.23.0` | 47.1 | Phase 47.1: File transfer resume design — `FILE_RESUME_DESIGN.md` (resolved with Baim: automatic on re-offer, backward compatible via an optional `resume_offset` in `file_accept`, `.part` kept on loss/failure and deleted on reject, hash mismatch or after 7 days). Documentation only. |
 | `1.23.1` | 47.2 | Phase 47.2: Partial download store — `core/transfer/partial.py`: validated `.part.meta` sidecar store (atomic write, defensive read, exact-match lookup, safe resume offset, discard, 7-day expiry) with 68 tests; not wired into the session yet. |
 | `1.23.2` | 47.3 | Phase 47.3: Optional resume_offset in file_accept — optional `resume_offset` in `file_accept` (builder and validator; added only when greater than zero, so legacy messages are unchanged) with 29 tests; no session change. |
+| `1.23.3` | 47.4 | Phase 47.4: Receiver resume implementation — lookup, checkpoint fsync (4 MiB), restart detection, connection-loss handler, retention policy, expiry sweep, `resumed_from` event field; 14 tests including real loopback with connection drop. |
+| `1.23.4` | 47.5 | Phase 47.5: Sender resume implementation — reads and validates `resume_offset` from `file_accept`, streams from offset, progress from offset, invalid offset ignored (backward compatible); 10 tests. |
+| `1.23.5` | 47.6 | Phase 47.6: UI resume support — offer dialog shows "Resume from X%", button reads "Resume", completion log notes resumption; 5 tests. |
+| `1.23.6` | 47.7 | Phase 47.7: End-to-end verification — comprehensive E2E test, README and design updated, Phase 47 complete. |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -334,9 +338,21 @@ Sub-steps (see `CHANGELOG.md` for full detail on each):
   in-memory relay hosting for active members only, separately from
   Rendezvous mode. This completes Phase 46.
 
-## Phase 47 design (resolved)
+## Phase 47 — File transfer resume (complete)
 
-Transfers currently restart from byte 0 (the README used to claim otherwise; see 1.22.13).
+Transfers now automatically resume from interruption. When a connection drops mid-transfer, the receiver keeps the partial download (with a `.part.meta` sidecar bound to the authenticated sender). When the same peer re-offers the same file, resumption is automatic. The receiver requests a `resume_offset` via the optional field in `file_accept`; the sender honors it if valid or ignores it and restarts from zero (the receiver detects this and truncates cleanly). Old peers that don't understand the field are backward compatible. Partial downloads expire after 7 days.
+
+Design: `docs/FILE_RESUME_DESIGN.md` (resolved before coding).
+
+- 47.1 (`1.23.0`): design document and roadmap entry.
+- 47.2 (`1.23.1`): sidecar store (`core/transfer/partial.py`) with 68 tests.
+- 47.3 (`1.23.2`): optional `resume_offset` in `file_accept` protocol with 29 tests.
+- 47.4 (`1.23.3`): receiver implementation — lookup, checkpoint fsync, restart detection, connection-loss handler, retention policy; 14 tests including real loopback with drop.
+- 47.5 (`1.23.4`): sender implementation — validates and honors offset, progress from offset; 10 tests.
+- 47.6 (`1.23.5`): UI — offer dialog shows "Resume from X%", completion log notes resumption; 5 tests.
+- 47.7 (`1.23.6`): end-to-end verification, README and design updated, phase complete.
+
+Total: 126 new tests (68+29+14+10+5), all green. Full suite: 976 passed.
 `FILE_RESUME_DESIGN.md` resolves the design with Baim before any code:
 
 - **Trigger:** automatic when the same file is offered again; the receiver recognizes it by
@@ -370,8 +386,8 @@ numeric phase order in the plan doc:
 5. **Phase 38 — Project structure final** (complete; design and as-built notes in
    `PROJECT_STRUCTURE_DESIGN.md`; steps: 38.2 `1.22.0`, 38.3 `1.22.1`, 38.4 `1.22.2`, 38.5 `1.22.3`, 38.6a `1.22.4`, 38.6b `1.22.5`, 38.7 `1.22.6`, 38.8 `1.22.7`, 38.9 `1.22.8`, 38.10 `1.22.9`, 38.11 `1.22.10`, 38.12 `1.22.11`, 38.13 `1.22.12`, 38.14 `1.22.13`)
 6. Security audit, release
-6. **Phase 47 — File transfer resume** (design in `FILE_RESUME_DESIGN.md`;
-   in progress: 47.1 `1.23.0`, 47.2 `1.23.1`, 47.3 `1.23.2`)
+7. **Phase 47 — File transfer resume** (design in `FILE_RESUME_DESIGN.md`;
+   **complete**: 47.1 `1.23.0`, 47.2 `1.23.1`, 47.3 `1.23.2`, 47.4 `1.23.3`, 47.5 `1.23.4`, 47.6 `1.23.5`, 47.7 `1.23.6`)
 
 ## Phase 38 — Project Structure
 
