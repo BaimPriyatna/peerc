@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.23.0] — Phase 47.1: File transfer resume design
+
+### Added
+- **`docs/FILE_RESUME_DESIGN.md`** [NEW]: the resolved design for resuming interrupted file transfers, written before any code. Owner decisions: resume is **automatic when the same file is offered again**; it is **backward compatible** (an optional `resume_offset` in `file_accept`, and a peer that ignores it makes the receiver restart cleanly from zero); a `.part` is **kept** on connection loss or failure and **deleted** on reject, on a final-hash mismatch, and after 7 days. The document also records the remaining design (authenticated-peer binding, a `.part.meta` sidecar with `fsync` checkpoints, restart detection on the first chunk, a retention table, UX, security analysis, test plan and the seven implementation sub-steps 47.2-47.7) and lists ten choices made without the owner for review.
+- **`docs/ROADMAP.md`**: a *Phase 47 design (resolved)* section, the version-table row and the entry in the recommended order.
+
+### Found while reading the code (not changed here)
+- `FileTransferSession` has **no handling of connection loss**: a transfer that loses its TCP connection stays in `_incoming` with an open file handle, and its `.part` is only removed by accident when a later offer for the same name is accepted. The design adds `handle_connection_lost`.
+- A second offer for a name whose `.part` belongs to a live transfer deletes that transfer's `.part` (`cleanup_part_file` at accept time). The design rejects such an offer instead.
+- There is no way to cancel a transfer in progress; the only user decision is Accept/Reject on the offer.
+
+Documentation only; suite unchanged (846 passed).
+
 ## [1.22.13] — Phase 38.14: README resume claim
 
 ### Changed
