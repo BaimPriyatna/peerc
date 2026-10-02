@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.23.4] — Phase 47.5: Sender resume implementation
+
+### Added
+- **`OutgoingTransfer.resume_offset`**: Phase 47.5 — byte offset requested by the receiver, extracted from `file_accept` message and validated before streaming.
+- **`FileTransferSession._is_valid_resume_offset(offset, file_size)`**: Phase 47.5 / §7 — validates that `resume_offset` from `file_accept` is an `int` (not `bool`), `0 <= offset <= file_size`, and `offset % CHUNK_SIZE == 0`. An invalid offset is logged and ignored (the file is sent from byte 0), which the receiver handles via restart detection (§6). This is **not** a protocol error per the design: a well-formed but unusable offset is the sender's problem to ignore, not the receiver's fault.
+- **`tests/test_file_resume_sender.py`** [NEW] (11, unit): covers fresh accept without offset (streams from 0), valid resume offset honored (streams from that offset with correct sequence index), invalid offset types ignored (bool, string, float), negative offset ignored, offset exceeding file size ignored, offset not chunk-aligned ignored, `offset == size` sends only `file_done` with no chunks, progress starts from `resume_offset` instead of 0, whole-file checksum sent in `file_done` regardless of offset, and direct unit test of the `_is_valid_resume_offset` helper with all edge cases. All 11 pass on the first try.
+- **Logging**: when a valid non-zero `resume_offset` is honored, logs `"Transfer <id>: resuming from offset <bytes> (<percent>%)"` at INFO level. When an invalid offset is received, logs `"Transfer <id>: ignoring invalid resume_offset <repr> (type=<type>, size=<size>)"` at WARNING level. This makes sender-side resume behavior observable without adding protocol chatter.
+
+### Changed
+- **`_handle_accept`**: now reads `resume_offset` from the `file_accept` message (defaults to `0`), validates it with `_is_valid_resume_offset`, and stores the result in `transfer.resume_offset`. If the offset is invalid, it is set to `0` and logged. The validated offset is then used when spawning `_send_chunks`.
+- **`_send_chunks`**: Phase 47.5 / §7 — now calls `read_chunks(transfer.filepath, start_offset=transfer.resume_offset, chunk_size=CHUNK_SIZE)` instead of `read_chunks(transfer.filepath, chunk_size=CHUNK_SIZE)`. The first chunk sent has `sequence = resume_offset // CHUNK_SIZE` and `offset = resume_offset`, exactly matching what the receiver expects. Progress tracking (`bytes_sent`) starts from `resume_offset` instead of `0`, so `_notify_progress` reports the correct absolute position. If `resume_offset == size`, no chunks are sent and the loop exits immediately; only `file_done` is sent (per §7). The whole-file checksum in `file_done` is unchanged and always covers the entire file, not just the resumed portion.
+
+### Tested
+- **Mutation checks**: three deliberate breakages of the sender resume logic (not using the offset in `read_chunks`, not validating the offset, not starting progress from the offset) were each caught by the new tests.
+- **Compatibility**: the tests include cases where invalid offsets are sent (wrong type, negative, exceeds size, not aligned). In all cases the sender ignores the offset and streams from `0`, which the receiver's restart detection (47.4 / §6) handles cleanly.
+- **Edge case**: when `resume_offset == file_size`, the sender sends `file_done` immediately with no chunks, and the receiver completes the transfer without writing anything (the file was already fully received in a previous attempt). This is covered by `test_offset_equal_to_size_sends_only_file_done`.
+- **Full suite**: 966 passed, 1 skipped, 7 deselected (was 955). The 11 new tests in `test_file_resume_sender.py` all pass. Three failures in `test_reliability_cases.py` remain a local environment issue (identity keystore) and are unrelated to this change.
+
 ## [1.23.3] — Phase 47.4: Receiver resume implementation
 
 ### Added

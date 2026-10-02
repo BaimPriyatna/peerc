@@ -89,6 +89,7 @@ class OutgoingTransfer:
     size: int
     checksum: str
     peer_device_id: str = ""
+    resume_offset: int = 0  # Phase 47.5: byte offset requested by receiver
     # Phase 34.1: guarded state machine (OFFERED -> WAITING_FOR_ACCEPT ->
     # SENDING -> WAITING_FOR_COMPLETE_ACK -> COMPLETED/FAILED/REJECTED/
     # CANCELLED) replaces what used to be a free-form status string
@@ -168,6 +169,20 @@ class FileTransferSession:
         if transfer_id in self._incoming:
             return self._incoming[transfer_id].resume_offset
         return self._offer_resume_offsets.get(transfer_id, 0)
+
+    def _is_valid_resume_offset(self, offset: any, file_size: int) -> bool:
+        """Phase 47.5 / §7: validate resume_offset from file_accept.
+        
+        Valid: int, 0 <= offset <= size, offset % CHUNK_SIZE == 0.
+        Invalid offset is ignored (send from 0), not a protocol error.
+        """
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            return False
+        if offset < 0 or offset > file_size:
+            return False
+        if offset % CHUNK_SIZE != 0:
+            return False
+        return True
 
     def _on_peer_disconnected(self, evt: Any) -> None:
         addr_key = getattr(evt, "addr_key", None)
@@ -467,6 +482,30 @@ class FileTransferSession:
         if transfer is None:
             await self._report_once(addr_key, ErrorCode.TRANSFER_NOT_FOUND, message.get("transfer_id"))
             return
+        
+        # Phase 47.5 / §7: read and validate resume_offset from file_accept
+        resume_offset = message.get("resume_offset", 0)
+        if self._is_valid_resume_offset(resume_offset, transfer.size):
+            transfer.resume_offset = resume_offset
+            if resume_offset > 0:
+                logger.info(
+                    "Transfer %s: resuming from offset %d (%.1f%%)",
+                    transfer.transfer_id,
+                    resume_offset,
+                    100.0 * resume_offset / transfer.size if transfer.size > 0 else 0,
+                )
+        else:
+            # Invalid offset is logged and ignored (send from 0); receiver will detect restart
+            if resume_offset != 0:
+                logger.warning(
+                    "Transfer %s: ignoring invalid resume_offset %r (type=%s, size=%d)",
+                    transfer.transfer_id,
+                    resume_offset,
+                    type(resume_offset).__name__,
+                    transfer.size,
+                )
+            transfer.resume_offset = 0
+        
         try:
             transfer.state.transition_to(OutgoingTransferState.SENDING)
         except InvalidTransferTransition:
@@ -491,9 +530,12 @@ class FileTransferSession:
         self._outgoing.pop(transfer.transfer_id, None)
 
     async def _send_chunks(self, transfer: OutgoingTransfer) -> None:
-        bytes_sent = 0
+        bytes_sent = transfer.resume_offset  # Phase 47.5: start progress from resume offset
         try:
-            for index, offset, chunk in read_chunks(transfer.filepath, chunk_size=CHUNK_SIZE):
+            # Phase 47.5 / §7: stream from resume_offset
+            for index, offset, chunk in read_chunks(
+                transfer.filepath, start_offset=transfer.resume_offset, chunk_size=CHUNK_SIZE
+            ):
                 if transfer.state.state is not OutgoingTransferState.SENDING:
                     return  # resolved from outside (peer error / abort) — stop streaming
                 payload = protocol.encode_file_data(transfer.transfer_id, index, offset, chunk)
@@ -504,6 +546,7 @@ class FileTransferSession:
                 bytes_sent += len(chunk)
                 self._notify_progress(transfer.transfer_id, bytes_sent, transfer.size, is_upload=True)
 
+            # Phase 47.5 / §7: if offset == size, no chunk is sent, only file_done
             if transfer.state.state is not OutgoingTransferState.SENDING:
                 return
             done = protocol.make_file_done(transfer.transfer_id, transfer.checksum)
