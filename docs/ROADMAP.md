@@ -167,6 +167,7 @@ endpoint_update.py` for the shape to copy.
 | `1.23.4` | 47.5 | Phase 47.5: Sender resume implementation — reads and validates `resume_offset` from `file_accept`, streams from offset, progress from offset, invalid offset ignored (backward compatible); 10 tests. |
 | `1.23.5` | 47.6 | Phase 47.6: UI resume support — offer dialog shows "Resume from X%", button reads "Resume", completion log notes resumption; 5 tests. |
 | `1.23.6` | 47.7 | Phase 47.7: End-to-end verification — comprehensive E2E test, README and design updated, Phase 47 complete. |
+| `1.23.8` | 47.8 | Phase 47.8: Fix the failing resume tests — the resume tests that never passed are fixed or rewritten (deterministic freeze instead of racing the transfer; nine real-TCP scenarios), and `write_meta` no longer deletes the caller's `.part` on invalid input. |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7

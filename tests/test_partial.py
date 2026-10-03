@@ -66,13 +66,18 @@ def test_writes_leave_no_temporary_files_and_replace_atomically(tmp_path):
     assert sorted(os.listdir(d)) == ["report.pdf.part", "report.pdf.part.meta"]
 
 
-def test_write_meta_refuses_values_the_validator_would_reject(tmp_path):
-    part = os.path.join(str(tmp_path), "a.bin.part")
-    open(part, "wb").close()
+def test_write_meta_refuses_invalid_values_without_touching_the_part_file(tmp_path):
+    """Rejecting bad input must not cost the caller their data: the .part
+    stays, no sidecar is written, and no temporary file is left behind."""
+    d = str(tmp_path)
+    part = os.path.join(d, "a.bin.part")
+    with open(part, "wb") as fh:
+        fh.write(b"precious bytes")
     with pytest.raises(ValueError):
         partial.write_meta(part, peer_device_id=PEER, filename="a.bin", size=10, checksum="not-a-hash",
                            dest_name="a.bin", committed=0)
-    assert not os.path.exists(part) and not os.path.exists(part + ".meta")
+    assert os.listdir(d) == ["a.bin.part"]
+    assert open(part, "rb").read() == b"precious bytes"
 
 
 # --- hostile / malformed sidecars -------------------------------------------

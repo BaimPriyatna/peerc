@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.23.8] — Phase 47.8: Fix the failing resume tests
+
+### Fixed
+- **`tests/test_file_resume_receiver.py::test_real_loopback_connection_drop_and_resume_offer`** failed deterministically on Linux and in CI from 1.23.3 on (CI was red for 1.23.3-1.23.7). The 1 MiB transfer finished over loopback *before* the connection was cut, so the test asserted a partial state on a transfer that had already completed. The sender is now frozen after exactly 3 data frames, so the interruption is a fact and not a race against the machine's speed. (The 1.23.3 entry describes this test as a 512 KiB transfer cut at 256 KiB that "passes on the first try" and resumes with the real sender; it uses 1 MiB, builds the resumed transfer from hand-made protocol messages, and did not pass.)
+- **`tests/test_e2e_resume.py`** was written against a `ConnectionManager` API that does not exist (`identity=`, `private_key=`, `connect`), so it never ran, and it also handed `read_meta` the `.part` path instead of the sidecar path. Rewritten as nine deterministic scenarios over real TCP with real handshakes, none of which race a timer: an interrupted transfer resumes and sends only the remaining chunks; a sender that ignores the offset makes the receiver restart cleanly; a corrupted partial is caught by the final SHA-256 and discarded; rejecting an offer deletes the partial; a zero-filled tail beyond `committed` is not trusted; a sidecar that lags behind the data resumes from what it records; a fully received but unfinalized file needs no chunks; a second offer for a partial in use is rejected; another peer's same-named file does not touch the partial.
+- **`core/transfer/partial.py` `write_meta`** validated its record only after writing the sidecar and, when invalid, deleted the caller's `.part` (a flaw in the 1.23.1 design). It now validates first and never touches the `.part` or leaves a temp file; its test asserts exactly that.
+- **Verification**: full suite 981 passed, 1 skipped, 7 deselected (Linux, Python 3.12). Eleven deliberate breakages were run against the new tests: nine of the resume logic (receiver not sending the offset, connection loss deleting the `.part`, sender always starting at 0, restart detection off, hash check skipped, reject not deleting, trusting file size instead of `committed`, and the two busy-partial checks) and two of the fixes above; all are caught except that either busy-partial check alone is invisible because the three layers back each other up (all three off is caught). The three `test_reliability_cases.py` failures and the Windows `resource` import error mentioned in earlier entries are environment-specific (they read the real `~/.peerc` identity, and `core/benchmarking.py` imports `resource`); they pass on Linux CI.
+
 ## [1.23.7] — Security audit: two bug fixes
 
 ### Fixed

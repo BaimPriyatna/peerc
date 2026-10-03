@@ -92,6 +92,11 @@ def write_meta(
         "created_at": created,
         "updated_at": now,
     }
+    # Validate before touching the disk. Rejecting bad input must never cost the
+    # caller their data, so an invalid record leaves the .part file alone.
+    info = _validate(record, meta_path)
+    if info is None:
+        raise ValueError("refusing to write an invalid partial-download record")
     directory = os.path.dirname(meta_path) or "."
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-partial-", suffix=".json")
     try:
@@ -110,10 +115,6 @@ def write_meta(
         except OSError:
             pass
         raise
-    info = read_meta(meta_path)
-    if info is None:  # the caller passed values the validator rejects
-        discard(part_path)
-        raise ValueError("refusing to write an invalid partial-download record")
     return info
 
 
@@ -146,6 +147,11 @@ def read_meta(meta_path: str) -> Optional[PartialInfo]:
             data = json.load(fh)
     except (OSError, ValueError):
         return None
+    return _validate(data, meta_path)
+
+
+def _validate(data: object, meta_path: str) -> Optional[PartialInfo]:
+    """Check a decoded sidecar record; return None if it is unusable."""
     if not isinstance(data, dict) or data.get("version") != META_VERSION:
         return None
 

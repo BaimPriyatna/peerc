@@ -587,35 +587,51 @@ async def test_real_loopback_connection_drop_and_resume_offer():
         b_addr_key = list(manager_b._connections.keys())[0]
         assert manager_b.get_peer_device_id(b_addr_key) == keypair_a.device_id
 
-        # 1 MiB test file (16 chunks) so it cannot complete in milliseconds
+        # 1 MiB test file (16 chunks); the sender is frozen after exactly 3 of them below
         test_file = os.path.join(dir_a, "loopback.bin")
         payload = os.urandom(1024 * 1024)
         checksum = hashlib.sha256(payload).hexdigest()
         with open(test_file, "wb") as f:
             f.write(payload)
 
-        # Hook on_progress on ft_b so we interrupt as soon as chunk 1 arrives
-        one_chunk_done = asyncio.Event()
+        # Freeze the sender after exactly 3 data frames. Racing the transfer against a
+        # timer is not an option: over loopback even 1 MiB completes in a few milliseconds.
+        frames_sent = 0
+        frozen = asyncio.Event()
+        release = asyncio.Event()
+        real_send_binary = manager_a.send_binary
 
-        def on_b_progress(tid, done, total):
-            if done >= CHUNK_SIZE:
-                one_chunk_done.set()
+        async def gated_send_binary(target, payload):
+            nonlocal frames_sent
+            frames_sent += 1
+            if frames_sent > 3:
+                frozen.set()
+                await release.wait()
+            return await real_send_binary(target, payload)
 
-        ft_b.on_progress = on_b_progress
+        manager_a.send_binary = gated_send_binary
 
         # A offers file to B
-        tid = await ft_a.offer_file(addr_key, test_file)
-        await asyncio.wait_for(one_chunk_done.wait(), timeout=5.0)
+        await ft_a.offer_file(addr_key, test_file)
+        await asyncio.wait_for(frozen.wait(), timeout=5.0)
+        for _ in range(500):  # B must have stored the 3 chunks before the cut
+            if any(t.bytes_received >= 3 * CHUNK_SIZE for t in ft_b._incoming.values()):
+                break
+            await asyncio.sleep(0.01)
 
-        # Abruptly kill connections mid-transfer
+        # Abruptly kill connections mid-transfer, then wait for B to notice
         await manager_a.close_all()
-        await asyncio.sleep(0.15)
+        for _ in range(500):
+            if not ft_b._incoming:
+                break
+            await asyncio.sleep(0.01)
+        release.set()
 
         part_b = get_part_path(os.path.join(dir_b, "loopback.bin"))
         assert os.path.exists(part_b)
         meta = read_meta(meta_path_for(part_b))
         assert meta is not None
-        assert meta.committed >= CHUNK_SIZE
+        assert meta.committed == 3 * CHUNK_SIZE
         assert meta.peer_device_id == keypair_a.device_id
         saved_committed = meta.committed
 

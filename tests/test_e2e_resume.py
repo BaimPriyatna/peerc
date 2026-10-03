@@ -1,7 +1,17 @@
-"""tests/test_e2e_resume.py — Phase 47.7: End-to-end resume integration test.
+"""tests/test_e2e_resume.py — Phase 47: end-to-end resume over real TCP.
 
-Full sender-to-receiver resume flow over real TCP connections with connection drop,
-verifying all components work together: partial store, protocol, sender, receiver, UI callbacks.
+Every scenario runs two (or three) real ConnectionManagers with real Ed25519
+handshakes on loopback. Nothing here races the transfer against a timer: the
+sender is *frozen* after exactly N data frames (its send_binary blocks), the
+receiver is waited on until it has stored those N chunks, and only then is the
+connection killed. That makes "interrupted mid-transfer" a fact instead of a
+hope, independent of how fast the machine is.
+
+The scenarios follow docs/FILE_RESUME_DESIGN.md: resume after an interruption,
+fallback to a restart for a sender that ignores the offset, a corrupted
+partial, rejecting an offer, a crash that left a zero-filled tail, an offer for
+a file that was already fully received, a busy partial, and a different peer
+offering a file with the same name.
 """
 
 import asyncio
@@ -10,227 +20,372 @@ import os
 import random
 import shutil
 import tempfile
-import uuid
 
 import pytest
 
 from core.events import EventBus, TransferCompleted
 from core.identity.device_identity import generate_keypair
+from core.transfer import partial
 from core.transfer.chunker import DEFAULT_CHUNK_SIZE
-from core.transfer.hashing import sha256_file
 from core.transfer.session import FileTransferSession
 from core.transport.manager import ConnectionManager
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.integration
 
-CHUNK_SIZE = DEFAULT_CHUNK_SIZE
-
-
-def _random_ports(n: int = 2):
-    base = random.randint(25000, 45000)
-    return [base + i for i in range(n)]
+CHUNK = DEFAULT_CHUNK_SIZE
+CHUNKS = 8
 
 
-async def test_full_e2e_resume_with_tcp_and_ui_callbacks():
-    """Full end-to-end: sender offers file, receiver accepts, connection drops mid-transfer,
-    re-offer resumes from partial, completion event includes resumed_from.
-    
-    This is the comprehensive integration test per FILE_RESUME_DESIGN.md §13.
-    """
-    dir_a = tempfile.mkdtemp(prefix="peerc_e2e_sender_")
-    dir_b = tempfile.mkdtemp(prefix="peerc_e2e_receiver_")
-    
-    try:
-        # Create 512 KiB test file
-        test_file = os.path.join(dir_a, "test.bin")
-        payload = os.urandom(8 * CHUNK_SIZE)
-        with open(test_file, "wb") as f:
-            f.write(payload)
-        expected_checksum = sha256_file(test_file)
-        
-        # Setup identities and managers
-        keypair_a = generate_keypair()
-        keypair_b = generate_keypair()
-        
-        ports = _random_ports(2)
-        
-        event_bus_a = EventBus()
-        event_bus_b = EventBus()
-        
-        manager_a = ConnectionManager(
-            identity=type("Id", (), {"device_id": keypair_a.device_id, "public_key": keypair_a.public_key})(),
-            private_key=keypair_a.private_key,
-            listen_port=ports[0],
-            event_bus=event_bus_a,
+async def wait_until(predicate, timeout=10.0, what="condition"):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"timed out waiting for {what}")
+        await asyncio.sleep(0.01)
+
+
+class Peer:
+    """One side of a transfer: manager + session + recorded callbacks."""
+
+    def __init__(self, name, kp=None):
+        self.name = name
+        self.kp = kp or generate_keypair()
+        self.bus = EventBus()
+        self.dir = tempfile.mkdtemp(prefix=f"peerc_e2e_{name}_")
+        self.accept = True
+        self.offers = []          # (transfer_id, filename, size, resume_offset)
+        self.completions = []     # (transfer_id, success, filepath)
+        self.progress = []        # (transfer_id, done, total)
+        self.events = []          # TransferCompleted events
+        self.manager = None
+        self.session = None
+        self.port = None
+
+    async def start(self, session_cls=FileTransferSession):
+        self.port = random.randint(30000, 60000)
+        self.manager = ConnectionManager(
+            listen_port=self.port, my_identity=self.kp, my_name=self.name, event_bus=self.bus,
         )
-        
-        manager_b = ConnectionManager(
-            identity=type("Id", (), {"device_id": keypair_b.device_id, "public_key": keypair_b.public_key})(),
-            private_key=keypair_b.private_key,
-            listen_port=ports[1],
-            event_bus=event_bus_b,
+        self.session = session_cls(
+            self.manager, downloads_dir=self.dir, event_bus=self.bus,
+            on_offer_received=self._on_offer, on_progress=self._on_progress, on_complete=self._on_complete,
         )
-        
-        # Track UI callbacks
-        offer_calls_b = []
-        progress_calls_a = []
-        progress_calls_b = []
-        complete_calls_a = []
-        complete_calls_b = []
-        
-        def on_offer_b(transfer_id, filename, size, sender_name):
-            offer_calls_b.append((transfer_id, filename, size, sender_name))
-            return True  # auto-accept
-        
-        def on_progress_a(transfer_id, done, total):
-            progress_calls_a.append((transfer_id, done, total))
-        
-        def on_progress_b(transfer_id, done, total):
-            progress_calls_b.append((transfer_id, done, total))
-        
-        def on_complete_a(transfer_id, success, filepath):
-            complete_calls_a.append((transfer_id, success, filepath))
-        
-        def on_complete_b(transfer_id, success, filepath):
-            complete_calls_b.append((transfer_id, success, filepath))
-        
-        # Setup transfer sessions
-        ft_a = FileTransferSession(
-            manager_a, downloads_dir=dir_a, event_bus=event_bus_a,
-            on_progress=on_progress_a, on_complete=on_complete_a,
-        )
-        
-        ft_b = FileTransferSession(
-            manager_b, downloads_dir=dir_b, event_bus=event_bus_b,
-            on_offer_received=on_offer_b, on_progress=on_progress_b, on_complete=on_complete_b,
-        )
-        
-        # Track TransferCompleted events
-        completed_events_b = []
-        
-        async def on_transfer_completed_b(evt):
-            completed_events_b.append(evt)
-        
-        event_bus_b.subscribe(TransferCompleted, on_transfer_completed_b)
-        
-        await manager_a.start_server()
-        await manager_b.start_server()
-        
-        # Connect
-        addr_key_ab = await manager_a.connect("127.0.0.1", ports[1])
-        await asyncio.sleep(0.1)
-        
-        # First attempt: offer and start transfer
-        transfer_id = await ft_a.offer_file(addr_key_ab, test_file)
-        assert transfer_id is not None
-        
-        await asyncio.sleep(0.2)  # let some chunks send
-        
-        # Verify initial offer was received
-        assert len(offer_calls_b) == 1
-        assert offer_calls_b[0][1] == "test.bin"
-        assert offer_calls_b[0][2] == len(payload)
-        
-        # Verify some progress happened
-        assert len(progress_calls_a) > 0
-        assert len(progress_calls_b) > 0
-        
-        # Simulate connection drop by closing manager A
-        await manager_a.close_all()
-        await asyncio.sleep(0.2)
-        
-        # Verify receiver kept the partial
-        part_path_b = os.path.join(dir_b, "test.bin.part")
-        assert os.path.exists(part_path_b)
-        
-        from core.transfer.partial import meta_path_for, read_meta
-        meta_path = meta_path_for(part_path_b)
-        assert os.path.exists(meta_path)
-        
-        meta = read_meta(part_path_b)
-        assert meta is not None
-        assert meta.peer_device_id == keypair_a.device_id
-        assert meta.filename == "test.bin"
-        assert meta.size == len(payload)
-        assert meta.checksum == expected_checksum
-        assert meta.committed > 0
-        assert meta.committed % CHUNK_SIZE == 0
-        saved_committed = meta.committed
-        
-        # Verify first attempt completed with error (connection_lost)
-        assert len(complete_calls_b) == 1
-        assert complete_calls_b[0][1] is False  # not success
-        
-        # Second attempt: reconnect and re-offer
-        manager_a2 = ConnectionManager(
-            identity=type("Id", (), {"device_id": keypair_a.device_id, "public_key": keypair_a.public_key})(),
-            private_key=keypair_a.private_key,
-            listen_port=ports[0],
-            event_bus=event_bus_a,
-        )
-        
-        ft_a2 = FileTransferSession(
-            manager_a2, downloads_dir=dir_a, event_bus=event_bus_a,
-            on_progress=on_progress_a, on_complete=on_complete_a,
-        )
-        
-        await manager_a2.start_server()
-        await asyncio.sleep(0.1)
-        
-        addr_key_ab2 = await manager_a2.connect("127.0.0.1", ports[1])
-        await asyncio.sleep(0.1)
-        
-        # Clear previous offer calls to track the resumed offer
-        offer_calls_b.clear()
-        
-        transfer_id2 = await ft_a2.offer_file(addr_key_ab2, test_file)
-        assert transfer_id2 is not None
-        
-        await asyncio.sleep(0.3)  # let transfer complete
-        
-        # Verify resumed offer was shown
-        assert len(offer_calls_b) == 1
-        
-        # Verify receiver recognized resume
-        resume_offset_b = ft_b.resume_offset_for(transfer_id2)
-        assert resume_offset_b == saved_committed
-        
-        # Wait for completion
-        await asyncio.sleep(0.5)
-        
-        # Verify transfer completed successfully
-        final_file = os.path.join(dir_b, "test.bin")
-        assert os.path.exists(final_file)
-        assert not os.path.exists(part_path_b)
-        assert not os.path.exists(meta_path)
-        
-        with open(final_file, "rb") as f:
-            assert f.read() == payload
-        
-        actual_checksum = sha256_file(final_file)
-        assert actual_checksum == expected_checksum
-        
-        # Verify completion callbacks were called
-        assert len(complete_calls_b) == 2  # first failed, second succeeded
-        assert complete_calls_b[1][1] is True  # success
-        assert complete_calls_b[1][2] == final_file
-        
-        # Verify TransferCompleted event includes resumed_from
-        assert len(completed_events_b) >= 1
-        final_event = completed_events_b[-1]
-        assert final_event.success is True
-        assert final_event.direction == "received"
-        assert final_event.resumed_from == saved_committed
-        assert final_event.size == len(payload)
-        assert final_event.checksum == expected_checksum
-        
-        # Verify sender progress started from resume_offset
-        # (progress_calls_a includes both attempts; we can't easily separate them here,
-        #  but the fact that the transfer completed with correct checksum proves it worked)
-        
-        await manager_a2.close_all()
-        await manager_b.close_all()
-        
-    finally:
-        shutil.rmtree(dir_a, ignore_errors=True)
-        shutil.rmtree(dir_b, ignore_errors=True)
+
+        async def on_completed(evt):
+            self.events.append(evt)
+
+        self.bus.subscribe(TransferCompleted, on_completed)
+        await self.manager.start_server()
+        return self
+
+    async def _on_offer(self, transfer_id, filename, size, sender_name):
+        self.offers.append((transfer_id, filename, size, self.session.resume_offset_for(transfer_id)))
+        return self.accept
+
+    def _on_progress(self, transfer_id, done, total):
+        self.progress.append((transfer_id, done, total))
+
+    def _on_complete(self, transfer_id, success, filepath):
+        self.completions.append((transfer_id, success, filepath))
+
+    async def stop(self):
+        try:
+            await self.manager.close_all()
+        except Exception:
+            pass
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+@pytest.fixture
+async def world():
+    peers = []
+
+    async def make(name, kp=None, session_cls=FileTransferSession):
+        peer = Peer(name, kp)
+        peers.append(peer)
+        return await peer.start(session_cls)
+
+    yield make
+    for peer in peers:
+        await peer.stop()
+
+
+class Gate:
+    """Blocks the sender's (frames+1)-th data frame until released."""
+
+    def __init__(self, manager, frames):
+        self.frames, self.sent = frames, 0
+        self.reached, self.release = asyncio.Event(), asyncio.Event()
+        original = manager.send_binary
+
+        async def gated(addr_key, payload):
+            self.sent += 1
+            if self.sent > self.frames:
+                self.reached.set()
+                await self.release.wait()
+            return await original(addr_key, payload)
+
+        manager.send_binary = gated
+
+
+def count_frames(manager):
+    frames = []
+    original = manager.send_binary
+
+    async def counting(addr_key, payload):
+        frames.append(len(payload))
+        return await original(addr_key, payload)
+
+    manager.send_binary = counting
+    return frames
+
+
+def hold_file_done(manager):
+    """Freeze the sender right before it announces file_done."""
+    reached, release = asyncio.Event(), asyncio.Event()
+    original = manager.send
+
+    async def gated(addr_key, message):
+        if isinstance(message, dict) and message.get("type") == "file_done":
+            reached.set()
+            await release.wait()
+        return await original(addr_key, message)
+
+    manager.send = gated
+    return reached, release
+
+
+def make_file(directory, name="data.bin", size=CHUNKS * CHUNK):
+    path = os.path.join(directory, name)
+    payload = os.urandom(size)
+    with open(path, "wb") as fh:
+        fh.write(payload)
+    return path, payload
+
+
+def sha(payload):
+    return hashlib.sha256(payload).hexdigest()
+
+
+async def interrupt(sender, receiver, filepath, frames):
+    """Start a transfer, freeze the sender after `frames` chunks, kill the link."""
+    gate = Gate(sender.manager, frames)
+    addr = await sender.manager.connect_to("127.0.0.1", receiver.port)
+    await sender.session.offer_file(addr, filepath)
+    await wait_until(gate.reached.is_set, what="sender to reach the freeze point")
+    await wait_until(
+        lambda: any(t.bytes_received >= frames * CHUNK for t in receiver.session._incoming.values()),
+        what="receiver to store the chunks",
+    )
+    await sender.manager.close_all()
+    await wait_until(lambda: not receiver.session._incoming, what="receiver to notice the lost connection")
+    gate.release.set()
+
+
+async def retry(world, sender_kp, receiver, filepath, session_cls=FileTransferSession, wait_for=None):
+    """A brand-new sender process (same identity) offers the file again."""
+    sender2 = await world("sender2", kp=sender_kp, session_cls=session_cls)
+    frames = count_frames(sender2.manager)
+    n_before = len(receiver.completions)
+    addr = await sender2.manager.connect_to("127.0.0.1", receiver.port)
+    tid = await sender2.session.offer_file(addr, filepath)
+    await wait_until(lambda: len(receiver.completions) > n_before or sender2.completions,
+                     what="the second attempt to finish")
+    return sender2, frames, tid
+
+
+def part_files(directory):
+    return sorted(n for n in os.listdir(directory) if n.endswith((".part", ".part.meta")))
+
+
+# ---------------------------------------------------------------------------
+
+async def test_interrupted_transfer_resumes_and_sends_only_the_rest(world):
+    sender = await world("sender")
+    receiver = await world("receiver")
+    path, payload = make_file(sender.dir)
+
+    await interrupt(sender, receiver, path, frames=3)
+
+    assert part_files(receiver.dir) == ["data.bin.part", "data.bin.part.meta"], "partial must be kept"
+    info = partial.read_meta(os.path.join(receiver.dir, "data.bin.part.meta"))
+    assert info.peer_device_id == sender.kp.device_id and info.checksum == sha(payload)
+    assert info.committed == 3 * CHUNK
+    assert receiver.completions[-1][1] is False and receiver.events[-1].error == "connection_lost"
+
+    sender2, frames, _ = await retry(world, sender.kp, receiver, path)
+
+    assert receiver.offers[-1][3] == 3 * CHUNK, "the offer dialog must know where it will resume"
+    assert len(frames) == CHUNKS - 3, "only the remaining chunks may be sent"
+    assert receiver.completions[-1][1] is True
+    with open(os.path.join(receiver.dir, "data.bin"), "rb") as fh:
+        assert fh.read() == payload
+    assert part_files(receiver.dir) == []
+    assert receiver.events[-1].success and receiver.events[-1].resumed_from == 3 * CHUNK
+    assert min(done for _, done, _ in sender2.progress) >= 3 * CHUNK, "sender progress starts at the offset"
+
+
+async def test_a_sender_that_ignores_the_offset_makes_the_receiver_restart_cleanly(world):
+    class OldSender(FileTransferSession):
+        async def _handle_accept(self, addr_key, message):
+            message = {k: v for k, v in message.items() if k != "resume_offset"}
+            return await super()._handle_accept(addr_key, message)
+
+    sender = await world("sender")
+    receiver = await world("receiver")
+    path, payload = make_file(sender.dir)
+    await interrupt(sender, receiver, path, frames=3)
+
+    _, frames, _ = await retry(world, sender.kp, receiver, path, session_cls=OldSender)
+
+    assert receiver.offers[-1][3] == 3 * CHUNK
+    assert len(frames) == CHUNKS, "an old sender streams everything"
+    assert receiver.completions[-1][1] is True
+    with open(os.path.join(receiver.dir, "data.bin"), "rb") as fh:
+        assert fh.read() == payload
+    assert receiver.events[-1].resumed_from == 0, "a restart is not reported as a resume"
+    assert part_files(receiver.dir) == []
+
+
+async def test_a_corrupted_partial_is_discarded_and_the_next_attempt_starts_fresh(world):
+    sender = await world("sender")
+    receiver = await world("receiver")
+    path, payload = make_file(sender.dir)
+    await interrupt(sender, receiver, path, frames=3)
+    with open(os.path.join(receiver.dir, "data.bin.part"), "r+b") as fh:
+        fh.seek(10)
+        original = fh.read(4)
+        fh.seek(10)
+        fh.write(bytes(b ^ 0xFF for b in original))          # flip bits inside the committed region
+
+    await retry(world, sender.kp, receiver, path)
+
+    assert receiver.completions[-1][1] is False, "end-to-end SHA-256 must catch the bad prefix"
+    assert not os.path.exists(os.path.join(receiver.dir, "data.bin")), "no corrupt file may be delivered"
+    assert part_files(receiver.dir) == [], "a failed hash discards the partial"
+
+    _, frames, _ = await retry(world, sender.kp, receiver, path)
+    assert len(frames) == CHUNKS and receiver.completions[-1][1] is True
+    with open(os.path.join(receiver.dir, "data.bin"), "rb") as fh:
+        assert fh.read() == payload
+
+
+async def test_rejecting_an_offer_that_has_a_partial_deletes_the_partial(world):
+    sender = await world("sender")
+    receiver = await world("receiver")
+    path, _ = make_file(sender.dir)
+    await interrupt(sender, receiver, path, frames=3)
+    assert part_files(receiver.dir)
+
+    receiver.accept = False
+    sender2 = await world("sender2", kp=sender.kp)
+    addr = await sender2.manager.connect_to("127.0.0.1", receiver.port)
+    await sender2.session.offer_file(addr, path)
+    await wait_until(lambda: receiver.offers[-1:] and not part_files(receiver.dir), what="the partial to be deleted")
+
+    assert receiver.offers[-1][3] == 3 * CHUNK
+    assert part_files(receiver.dir) == []
+
+
+async def test_bytes_after_the_committed_offset_are_never_trusted(world):
+    """A crash can leave a zero-filled tail beyond what was fsynced."""
+    sender = await world("sender")
+    receiver = await world("receiver")
+    path, payload = make_file(sender.dir)
+    await interrupt(sender, receiver, path, frames=3)
+    with open(os.path.join(receiver.dir, "data.bin.part"), "ab") as fh:
+        fh.write(b"\x00" * (2 * CHUNK + 123))
+
+    _, frames, _ = await retry(world, sender.kp, receiver, path)
+
+    assert receiver.offers[-1][3] == 3 * CHUNK
+    assert len(frames) == CHUNKS - 3
+    with open(os.path.join(receiver.dir, "data.bin"), "rb") as fh:
+        assert fh.read() == payload
+
+
+async def test_a_sidecar_that_lags_behind_the_data_resumes_from_what_it_records(world):
+    sender = await world("sender")
+    receiver = await world("receiver")
+    path, payload = make_file(sender.dir)
+    await interrupt(sender, receiver, path, frames=3)
+    part = os.path.join(receiver.dir, "data.bin.part")
+    info = partial.read_meta(partial.meta_path_for(part))
+    partial.write_meta(part, peer_device_id=info.peer_device_id, filename=info.filename, size=info.size,
+                       checksum=info.checksum, dest_name=info.dest_name, committed=2 * CHUNK)
+
+    _, frames, _ = await retry(world, sender.kp, receiver, path)
+
+    assert receiver.offers[-1][3] == 2 * CHUNK and len(frames) == CHUNKS - 2
+    with open(os.path.join(receiver.dir, "data.bin"), "rb") as fh:
+        assert fh.read() == payload
+
+
+async def test_a_file_that_was_fully_received_but_not_finalized_needs_no_chunks(world):
+    sender = await world("sender")
+    receiver = await world("receiver")
+    path, payload = make_file(sender.dir, size=4 * CHUNK)        # exact multiple of the chunk size
+    reached, release = hold_file_done(sender.manager)
+    addr = await sender.manager.connect_to("127.0.0.1", receiver.port)
+    await sender.session.offer_file(addr, path)
+    await wait_until(reached.is_set, what="sender to hold file_done")
+    await wait_until(lambda: any(t.bytes_received == 4 * CHUNK for t in receiver.session._incoming.values()),
+                     what="receiver to hold every chunk")
+    await sender.manager.close_all()
+    await wait_until(lambda: not receiver.session._incoming, what="connection loss")
+    release.set()
+    assert partial.read_meta(os.path.join(receiver.dir, "data.bin.part.meta")).committed == 4 * CHUNK
+
+    _, frames, _ = await retry(world, sender.kp, receiver, path)
+
+    assert receiver.offers[-1][3] == 4 * CHUNK
+    assert frames == [], "nothing is left to send"
+    assert receiver.completions[-1][1] is True
+    with open(os.path.join(receiver.dir, "data.bin"), "rb") as fh:
+        assert fh.read() == payload
+
+
+async def test_a_second_offer_for_a_partial_in_use_is_rejected_and_the_first_transfer_survives(world):
+    sender = await world("sender")
+    receiver = await world("receiver")
+    path, payload = make_file(sender.dir)
+    gate = Gate(sender.manager, 3)
+    addr = await sender.manager.connect_to("127.0.0.1", receiver.port)
+    await sender.session.offer_file(addr, path)
+    await wait_until(gate.reached.is_set, what="sender to freeze")
+    await wait_until(lambda: any(t.bytes_received >= 3 * CHUNK for t in receiver.session._incoming.values()),
+                     what="receiver to store 3 chunks")
+
+    second = await sender.session.offer_file(addr, path)             # same peer, same file, first still live
+    await wait_until(lambda: any(not ok for _, ok, _ in sender.completions) or second not in sender.session._outgoing,
+                     what="the second offer to be refused")
+    assert len(receiver.session._incoming) == 1, "the live transfer must not be touched"
+
+    gate.release.set()
+    await wait_until(lambda: any(ok for _, ok, _ in receiver.completions), what="the first transfer to finish")
+    with open(os.path.join(receiver.dir, "data.bin"), "rb") as fh:
+        assert fh.read() == payload
+    assert part_files(receiver.dir) == []
+
+
+async def test_another_peers_offer_with_the_same_name_does_not_destroy_a_partial(world):
+    sender = await world("sender")
+    other = await world("other")
+    receiver = await world("receiver")
+    path, payload = make_file(sender.dir)
+    await interrupt(sender, receiver, path, frames=3)
+    kept = partial.read_meta(os.path.join(receiver.dir, "data.bin.part.meta"))
+
+    other_path, other_payload = make_file(other.dir, name="data.bin")      # different content, same name
+    addr = await other.manager.connect_to("127.0.0.1", receiver.port)
+    await other.session.offer_file(addr, other_path)
+    await wait_until(lambda: any(ok for _, ok, _ in receiver.completions), what="the other peer's transfer")
+
+    delivered = sorted(n for n in os.listdir(receiver.dir) if not n.startswith("data.bin.part"))
+    assert len(delivered) == 1 and delivered[0] != "data.bin", f"must not overwrite or reuse the partial: {delivered}"
+    assert partial.read_meta(os.path.join(receiver.dir, "data.bin.part.meta")) == kept, "the partial is untouched"
+
+    _, frames, _ = await retry(world, sender.kp, receiver, path)
+    assert len(frames) == CHUNKS - 3, "the original sender can still resume"
+    with open(os.path.join(receiver.dir, "data.bin"), "rb") as fh:
+        assert fh.read() == payload
