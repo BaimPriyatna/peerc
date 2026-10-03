@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.23.7] — Security audit: two bug fixes
+
+### Fixed
+- **H-1 (`core/transfer/session.py`, `_handle_chunk`)**: `file_handle.write(data)` is now wrapped in `try/except OSError`. Previously, a disk-full condition (`errno 28`) during a file transfer raised an unhandled exception that propagated through the dispatch loop, leaving the transfer with an open file handle and no cleanup. Now the receiver calls `_abort_incoming(transfer, "disk_full")` and returns cleanly, so the `.part` file and sidecar are discarded and the session continues normally.
+- **H-2 (`core/vault/secure_file.py`, `_save_metadata`)**: the metadata write is now atomic (write-temp-then-`os.replace()`), matching the pattern used by `save_vault_keyfile()` and `partial.write_meta()` throughout the project. Previously a crash between encrypting the `.peercfile` and completing the `.meta` write left an unrecoverable orphaned ciphertext — `list_secure_files()` would silently skip it on the next run.
+
 ## [1.23.5] — Phase 47.6: UI resume support
 
 ### Added

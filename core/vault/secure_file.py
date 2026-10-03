@@ -262,11 +262,17 @@ def load_metadata(secure_storage_dir: str, secure_id: str) -> SecureFileMetadata
 
 
 def _save_metadata(secure_storage_dir: str, metadata: SecureFileMetadata) -> None:
-    """Save metadata for a secure file (internal helper)."""
+    """Save metadata for a secure file (internal helper).
+    
+    H-2 (security audit): uses write-temp-then-os.replace() for crash safety,
+    matching the pattern used in save_vault_keyfile() and partial.write_meta().
+    A crash mid-write no longer leaves a corrupt .meta alongside its ciphertext.
+    """
     meta_path = os.path.join(
         secure_storage_dir, f"{metadata.secure_id}{METADATA_EXTENSION}"
     )
-    
+    tmp_path = meta_path + ".tmp"
+
     data = {
         "secure_id": metadata.secure_id,
         "original_filename": metadata.original_filename,
@@ -276,9 +282,17 @@ def _save_metadata(secure_storage_dir: str, metadata: SecureFileMetadata) -> Non
         "encrypted_at": metadata.encrypted_at,
         "checksum": metadata.checksum,
     }
-    
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, meta_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def list_secure_files(secure_storage_dir: str) -> list[SecureFileMetadata]:

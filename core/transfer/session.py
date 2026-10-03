@@ -841,7 +841,13 @@ class FileTransferSession:
             await self._abort_incoming(transfer, "declared size exceeded")
             return
 
-        transfer._file_handle.write(data)
+        # H-1 (security audit): wrap write in OSError so a full disk aborts cleanly
+        # instead of propagating an unhandled exception through the dispatch loop.
+        try:
+            transfer._file_handle.write(data)
+        except OSError:
+            await self._abort_incoming(transfer, "disk_full")
+            return
         transfer.bytes_received += len(data)
         transfer.expected_chunk_index += 1
 
