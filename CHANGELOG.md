@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.23.9] — Phase audit #4: Record trust only after the handshake signature is verified
+
+### Security
+- **Security audit finding #4 (confirmed)**: both handshake flows called `_check_and_update_trust` -- which writes a first-seen row (or bumps `last_seen`) -- *before* the peer's signature over the transcript was verified (initiator: step 6 then 7; responder: step 4 then 9). Anyone able to generate a keypair could therefore leave a `PENDING` row with a name of their choosing in `trusted_devices` for every connection attempt, even with a deliberately wrong signature. The lookup is now read-only (`_check_trust`: still rejects `REVOKED` and `KEY_CHANGED` immediately) and the write (`_record_trust`) happens only after the signature has been verified. `_check_and_update_trust` stays as a combined helper for callers that already hold a verified identity. Recorded peer names are cut to `MAX_PEER_NAME_LENGTH` (64); the name was unbounded.
+- **`tests/test_handshake_trust_order.py`** [NEW] (4): a responder with a bad signature leaves no row on the initiator; an initiator that cannot sign leaves none on the responder; a successful handshake still records both peers as `PENDING`; a 5000-character name is stored capped. The first, second and fourth failed against the previous code (a row was left behind each time); three deliberate re-introductions of the old behavior were each caught.
+- **Test stability**: `tests/test_e2e_resume.py` failed in about one run in eight with `address already in use` because it picked random ports from a range that overlaps the ephemeral ports used by outgoing connections. It and `test_file_resume_receiver.py::_random_ports` now ask the OS for free ports (with a retry on conflict); twelve consecutive runs pass. Other test files still pick random ports (`test_benchmarks`, `test_connection_fsm_integration`, `test_error_integration`, `test_reliability_cases`, `test_transfer_fsm_integration`); they have been stable in CI and were left alone.
+- **Full suite**: 985 passed, 1 skipped, 7 deselected (was 981); no other behavior changes.
+
 ## [1.23.8] — Phase 47.8: Fix the failing resume tests
 
 ### Fixed

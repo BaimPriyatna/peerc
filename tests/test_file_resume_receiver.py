@@ -18,6 +18,7 @@ Tests receiver-side resume functionality per docs/FILE_RESUME_DESIGN.md §5, §6
 """
 
 import asyncio
+import socket
 import hashlib
 import os
 import random
@@ -60,8 +61,16 @@ CHUNK_SIZE = DEFAULT_CHUNK_SIZE
 
 
 def _random_ports(n: int = 2):
-    base = random.randint(25000, 45000)
-    return [base + i for i in range(n)]
+    """n distinct ports the OS has just confirmed free (a fixed random range can
+    collide with the ephemeral ports used by outgoing connections)."""
+    probes = [socket.socket() for _ in range(n)]
+    try:
+        for probe in probes:
+            probe.bind(("0.0.0.0", 0))
+        return [probe.getsockname()[1] for probe in probes]
+    finally:
+        for probe in probes:
+            probe.close()
 
 
 class MockTransportManager:

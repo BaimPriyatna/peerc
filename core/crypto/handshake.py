@@ -55,6 +55,7 @@ from .key_exchange import (
 )
 
 HANDSHAKE_TIMEOUT = 5.0  # seconds (IMPLEMENTATION_PLAN.md line 704)
+MAX_PEER_NAME_LENGTH = 64     # display names are cut to this before being stored
 NONCE_BYTES = 32
 
 
@@ -196,12 +197,16 @@ def _verify_device_identity(device_id: str, public_key_hex: str) -> bytes:
     return pub_bytes
 
 
-def _check_and_update_trust(
+def _check_trust(
     trust_store: Optional[TrustStore],
     device_id: str,
     public_key_hex: str,
-    peer_name: str,
 ) -> TrustDecision:
+    """Read-only trust lookup. Rejects REVOKED and KEY_CHANGED devices.
+
+    This never writes: at the point it runs the peer has only *claimed* an
+    identity and has not yet proved it holds the private key.
+    """
     if trust_store is None:
         return TrustDecision.UNKNOWN
 
@@ -212,13 +217,40 @@ def _check_and_update_trust(
         raise KeyChangedError(
             f"device {device_id} has CHANGED its public key (possible impersonation)"
         )
-    if decision == TrustDecision.UNKNOWN:
-        trust_store.record_first_seen(device_id, public_key_hex, peer_name)
-        decision = TrustDecision.PENDING
-    elif decision in (TrustDecision.PENDING, TrustDecision.TRUSTED):
-        trust_store.touch_last_seen(device_id)
-
     return decision
+
+
+def _record_trust(
+    trust_store: Optional[TrustStore],
+    device_id: str,
+    public_key_hex: str,
+    peer_name: str,
+    decision: TrustDecision,
+) -> TrustDecision:
+    """Write the outcome of `_check_trust`. Call it only after the peer's
+    signature over the handshake transcript has been verified; before that,
+    anyone able to generate a keypair could fill the trust store."""
+    if trust_store is None:
+        return decision
+    if decision == TrustDecision.UNKNOWN:
+        trust_store.record_first_seen(device_id, public_key_hex, peer_name[:MAX_PEER_NAME_LENGTH])
+        return TrustDecision.PENDING
+    if decision in (TrustDecision.PENDING, TrustDecision.TRUSTED):
+        trust_store.touch_last_seen(device_id)
+    return decision
+
+
+def _check_and_update_trust(
+    trust_store: Optional[TrustStore],
+    device_id: str,
+    public_key_hex: str,
+    peer_name: str,
+) -> TrustDecision:
+    """Look up and record in one step. The handshake itself no longer uses
+    this (it records only after verifying the signature); kept for callers
+    that already hold a verified identity."""
+    decision = _check_trust(trust_store, device_id, public_key_hex)
+    return _record_trust(trust_store, device_id, public_key_hex, peer_name, decision)
 
 
 async def perform_handshake_initiator(
@@ -282,12 +314,9 @@ async def perform_handshake_initiator(
     peer_pub_bytes = _verify_device_identity(resp_msg["device_id"], resp_msg["public_key"])
 
     # 6. Check trust store
-    trust_decision = _check_and_update_trust(
-        trust_store,
-        resp_msg["device_id"],
-        resp_msg["public_key"],
-        resp_msg["sender_name"],
-    )
+    # Read-only: the responder has not yet proved it holds its private key.
+    # Nothing is recorded until its signature has been verified below.
+    pre_decision = _check_trust(trust_store, resp_msg["device_id"], resp_msg["public_key"])
 
     # 7. Verify responder signature over transcript
     resp_transcript = compute_responder_transcript(init_msg, resp_msg)
@@ -305,6 +334,15 @@ async def perform_handshake_initiator(
             )
         )
         raise SignatureVerificationError(f"invalid responder signature: {e}") from e
+
+    # The responder proved possession of its key; only now may it be recorded.
+    trust_decision = _record_trust(
+        trust_store,
+        resp_msg["device_id"],
+        resp_msg["public_key"],
+        resp_msg["sender_name"],
+        pre_decision,
+    )
 
     # 8. Compute initiator signature over cumulative transcript
     init_transcript = compute_initiator_transcript(resp_transcript, resp_msg["signature"])
@@ -379,12 +417,9 @@ async def perform_handshake_responder(
     peer_pub_bytes = _verify_device_identity(init_msg["device_id"], init_msg["public_key"])
 
     # 4. Check trust store
-    trust_decision = _check_and_update_trust(
-        trust_store,
-        init_msg["device_id"],
-        init_msg["public_key"],
-        init_msg["sender_name"],
-    )
+    # Read-only: the initiator has not yet proved it holds its private key.
+    # Nothing is recorded until its signature has been verified below.
+    pre_decision = _check_trust(trust_store, init_msg["device_id"], init_msg["public_key"])
 
     # 5. Generate responder ephemeral keypair and nonce
     my_ephemeral = generate_ephemeral_keypair()
@@ -448,6 +483,15 @@ async def perform_handshake_responder(
             )
         )
         raise SignatureVerificationError(f"invalid initiator signature: {e}") from e
+
+    # The initiator proved possession of its key; only now may it be recorded.
+    trust_decision = _record_trust(
+        trust_store,
+        init_msg["device_id"],
+        init_msg["public_key"],
+        init_msg["sender_name"],
+        pre_decision,
+    )
 
     # 10. Compute Diffie-Hellman shared secret
     try:

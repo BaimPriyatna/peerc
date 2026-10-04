@@ -17,8 +17,8 @@ offering a file with the same name.
 import asyncio
 import hashlib
 import os
-import random
 import shutil
+import socket
 import tempfile
 
 import pytest
@@ -34,6 +34,13 @@ pytestmark = pytest.mark.integration
 
 CHUNK = DEFAULT_CHUNK_SIZE
 CHUNKS = 8
+
+
+def free_port():
+    """A port the OS has just confirmed is free (random picks collide with ephemeral ports)."""
+    with socket.socket() as probe:
+        probe.bind(("0.0.0.0", 0))
+        return probe.getsockname()[1]
 
 
 async def wait_until(predicate, timeout=10.0, what="condition"):
@@ -62,10 +69,20 @@ class Peer:
         self.port = None
 
     async def start(self, session_cls=FileTransferSession):
-        self.port = random.randint(30000, 60000)
-        self.manager = ConnectionManager(
-            listen_port=self.port, my_identity=self.kp, my_name=self.name, event_bus=self.bus,
-        )
+        last_error = None
+        for _ in range(5):                       # another process can still grab the port in between
+            self.port = free_port()
+            self.manager = ConnectionManager(
+                listen_port=self.port, my_identity=self.kp, my_name=self.name, event_bus=self.bus,
+            )
+            try:
+                await self.manager.start_server()
+            except OSError as exc:
+                last_error = exc
+                continue
+            break
+        else:
+            raise last_error
         self.session = session_cls(
             self.manager, downloads_dir=self.dir, event_bus=self.bus,
             on_offer_received=self._on_offer, on_progress=self._on_progress, on_complete=self._on_complete,
@@ -75,7 +92,6 @@ class Peer:
             self.events.append(evt)
 
         self.bus.subscribe(TransferCompleted, on_completed)
-        await self.manager.start_server()
         return self
 
     async def _on_offer(self, transfer_id, filename, size, sender_name):
