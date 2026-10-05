@@ -21,6 +21,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from core.security.filenames import sanitize_filename
+
 SECURE_FILE_EXTENSION = ".peercfile"
 METADATA_EXTENSION = ".meta"
 
@@ -126,7 +128,10 @@ def encrypt_file(
     # Create and save metadata
     metadata = SecureFileMetadata(
         secure_id=secure_id,
-        original_filename=original_filename or os.path.basename(plaintext_path),
+        # A name that came from a peer is attacker-controlled: keep only a plain file name.
+        original_filename=sanitize_filename(
+            original_filename or os.path.basename(plaintext_path), fallback="file"
+        ),
         size=len(plaintext),
         salt=salt,
         nonce=nonce,

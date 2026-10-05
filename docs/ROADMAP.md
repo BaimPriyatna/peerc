@@ -170,6 +170,7 @@ endpoint_update.py` for the shape to copy.
 | `1.23.8` | 47.8 | Phase 47.8: Fix the failing resume tests — the resume tests that never passed are fixed or rewritten (deterministic freeze instead of racing the transfer; nine real-TCP scenarios), and `write_meta` no longer deletes the caller's `.part` on invalid input. |
 | `1.23.9` | audit #4 | Phase audit #4: Record trust only after the handshake signature is verified — handshake no longer writes to the trust store before the peer's signature is verified (audit #4), recorded names are capped, and the resume e2e tests no longer collide on random ports. |
 | `1.23.10` | audit #13 | Phase audit #13: Private vault keyfile — the vault keyfile is written through a random-named 0600 temporary file in a 0700 directory instead of a guessable `.tmp` name with default modes (audit #13), with 6 tests. |
+| `1.23.11` | audit #1 #2 #10 | Phase audit #1 #2 #10: One filename sanitizer — peer-supplied file names go through one sanitizer (directory parts, control characters, Windows streams, device names, trailing dots, length) when received, stored in the vault, opened and exported (audit #1, #2, #10), with 81 tests. |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7

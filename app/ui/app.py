@@ -149,6 +149,7 @@ from core.vault import (
 )
 from core.transport.manager import ConnectionManager
 from core import protocol
+from core.security.filenames import sanitize_filename
 from core.discovery import broadcast as discovery_broadcast
 from core.discovery.constants import BROADCAST_PORT
 from core.discovery.identity_loader import save_identity
@@ -847,12 +848,13 @@ class ChatApp(App):
             return
         
         # Destination: downloads_dir by default
-        destination = os.path.join(self.downloads_dir, match.original_filename)
+        export_name = sanitize_filename(match.original_filename, fallback="file")
+        destination = os.path.join(self.downloads_dir, export_name)
         os.makedirs(self.downloads_dir, exist_ok=True)
         
         # Handle existing file
         if os.path.exists(destination):
-            base, ext = os.path.splitext(match.original_filename)
+            base, ext = os.path.splitext(export_name)
             counter = 1
             while os.path.exists(destination):
                 destination = os.path.join(self.downloads_dir, f"{base} ({counter}){ext}")

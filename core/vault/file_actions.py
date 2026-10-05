@@ -16,6 +16,8 @@ import shutil
 import tempfile
 from typing import Optional
 
+from core.security.filenames import sanitize_filename
+
 from .secure_file import (
     SecureFileError,
     SecureFileMetadata,
@@ -92,7 +94,8 @@ def open_secure_file(
         os.makedirs(temp_dir, mode=0o700, exist_ok=True)
     
     # Decrypt to temp location
-    temp_path = os.path.join(temp_dir, metadata.original_filename)
+    # The stored name is read back from disk; never trust it as a path.
+    temp_path = os.path.join(temp_dir, sanitize_filename(metadata.original_filename, fallback="file"))
     dek = session.dek_bytes()
     decrypt_file(secure_id, secure_storage_dir, dek, temp_path)
     

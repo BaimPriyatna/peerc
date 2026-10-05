@@ -13,6 +13,8 @@ import os
 import shutil
 from typing import Optional
 
+from core.security.filenames import MAX_FILENAME_BYTES, UnsafeFilenameError, sanitize_filename
+
 from .hashing import sha256_file
 from .resume import cleanup_part_file, finalize_part_file, get_part_path, get_partial_bytes
 
@@ -49,9 +51,11 @@ def resolve_safe_dest_path(
     filename: str, downloads_dir: str, allow_existing_part: bool = False
 ) -> str:
     """Turn a remote-supplied filename into a safe, unique path inside downloads_dir."""
-    name = os.path.basename(filename.replace("\\", "/")).strip()
-    if not name or name in (".", ".."):
-        raise TransferSecurityError(f"Unsafe filename: {filename!r}")
+    try:
+        # Leave room for " (99)" and ".part" so the staging name stays within filesystem limits.
+        name = sanitize_filename(filename, max_bytes=MAX_FILENAME_BYTES - 16)
+    except UnsafeFilenameError as exc:
+        raise TransferSecurityError(f"Unsafe filename: {filename!r}") from exc
 
     downloads_root = os.path.realpath(downloads_dir)
     base, ext = os.path.splitext(name)
