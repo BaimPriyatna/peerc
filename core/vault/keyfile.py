@@ -21,6 +21,7 @@ Phase 39 sub-steps):
 import base64
 import json
 import os
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -140,16 +141,47 @@ def vault_exists(path: str = DEFAULT_VAULT_KEYFILE) -> bool:
     return os.path.exists(path)
 
 
+def _ensure_private_dir(directory: str) -> None:
+    """Create `directory` private to the user (0700). An existing directory is
+    only re-permissioned when it is the app's own default one; a directory the
+    caller chose is not ours to change."""
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    if os.path.abspath(directory) == os.path.abspath(os.path.dirname(DEFAULT_VAULT_KEYFILE)):
+        try:
+            os.chmod(directory, 0o700)
+        except OSError:
+            pass  # best effort (e.g. filesystems without POSIX modes)
+
+
 def save_vault_keyfile(keyfile: VaultKeyfile, path: str = DEFAULT_VAULT_KEYFILE) -> None:
     """Write-temp-then-atomic-rename (same crash-safety pattern used
-    elsewhere in this design, §17) — a crash mid-write must never leave
-    a half-written, corrupt keyfile."""
+    elsewhere in this design, \u00a717) \u2014 a crash mid-write must never leave
+    a half-written, corrupt keyfile.
+
+    The file holds the wrapped data-encryption key, so it is private to the
+    user (0600) and the temporary file has a random name created exclusively
+    by mkstemp: a fixed, guessable name would let a symlink planted there
+    redirect the write.
+    """
     directory = os.path.dirname(path) or "."
-    os.makedirs(directory, exist_ok=True)
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(keyfile.to_json_dict(), f, indent=2)
-    os.replace(tmp_path, path)
+    _ensure_private_dir(directory)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".vault_keyfile-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(keyfile.to_json_dict(), f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(tmp_path, 0o600)
+        except OSError:
+            pass  # best effort (e.g. filesystems without POSIX modes)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def load_vault_keyfile(path: str = DEFAULT_VAULT_KEYFILE) -> VaultKeyfile:

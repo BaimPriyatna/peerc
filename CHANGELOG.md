@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.23.10] — Phase audit #13: Private vault keyfile
+
+### Security
+- **Security audit finding #13 (confirmed)**: `vault_keyfile.json`, which holds the wrapped data-encryption key, was created with the process default mode (world-readable under a normal umask) inside a `~/.peerc` directory created the same way, and it was written through the fixed, guessable temporary name `vault_keyfile.json.tmp`, so a symlink planted at that name redirected the write (a regression test demonstrated this against the old code). `save_vault_keyfile` now writes through `tempfile.mkstemp` (random name, mode 0600, never reached through a planted symlink), creates new directories 0700, tightens the app's own default directory (`~/.peerc`) to 0700 but leaves any directory the caller chose alone, and removes its temporary file when a write fails, leaving the previous keyfile intact. The atomic-replace crash safety is unchanged.
+- **`tests/test_vault_keyfile_permissions.py`** [NEW] (6, POSIX): file mode 0600, new directory 0700, loose permissions tightened on the next save, default directory tightened while others are left alone, a planted symlink at the old temp name not followed, and no temp file left after a failed write. All six failed against the previous code; five deliberate re-introductions of the old behavior were each caught.
+- **Limits**: permission bits are POSIX-only; on Windows the random temporary name and the failure cleanup apply, but access is governed by the ACL inherited from the profile directory. A `vault_keyfile.json` that already exists keeps its old mode until the next save (or `chmod 600 ~/.peerc/vault_keyfile.json`).
+- **Full suite**: 991 passed, 1 skipped, 7 deselected (was 985).
+
 ## [1.23.9] — Phase audit #4: Record trust only after the handshake signature is verified
 
 ### Security

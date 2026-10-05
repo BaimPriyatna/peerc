@@ -8,7 +8,7 @@
 [![Tests](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml/badge.svg)](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.23.9-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.23.10-informational.svg)](CHANGELOG.md)
 
 A terminal-based peer-to-peer chat and file transfer application. No central server — peers discover each other directly over the local network (LAN or WiFi hotspot) and communicate directly over encrypted TCP connections.
 
@@ -300,7 +300,7 @@ The full suite (minus benchmarks) also runs automatically in CI on every push to
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for phased progress and [`CHANGELOG.md`](CHANGELOG.md) for a full version history.
 
-Current version: **1.23.9** — Phase 47 (file transfer resume) complete: automatic resume from interruption with backward compatibility, sidecar metadata, restart detection, and 7-day expiry; Phase 38 (project structure) complete.
+Current version: **1.23.10** — Phase 47 (file transfer resume) complete: automatic resume from interruption with backward compatibility, sidecar metadata, restart detection, and 7-day expiry; Phase 38 (project structure) complete.
 Phase 36 & 37 (Trust Center UX) complete,
 Phase 28-35 (Reliability program) underway: 28.1 (logging), 29/30.1
 (reliability taxonomy + task registry), 31.1 (performance baselines),
