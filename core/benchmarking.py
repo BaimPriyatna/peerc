@@ -14,8 +14,12 @@ gate, once this sub-step has produced docs/benchmarks/baseline.json.
 import asyncio
 import enum
 import json
-import resource
 import sys
+
+try:
+    import resource
+except ImportError:  # Windows has no `resource` module
+    resource = None
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +44,8 @@ def peak_rss_mb() -> float:
     ru_maxrss is kilobytes on Linux but bytes on macOS — normalize by
     platform rather than assuming Linux (CI matrix isn't macOS today,
     but a contributor's laptop might be)."""
+    if resource is None:
+        return 0.0  # not measured on this platform (no `resource` module)
     raw = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform == "darwin":
         return raw / (1024 * 1024)

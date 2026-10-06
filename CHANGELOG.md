@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.23.12] — Phase audit follow-up: Triage record and a Windows-importable benchmarking module
+
+### Added
+- **`docs/SECURITY_AUDIT_TRIAGE.md`** [NEW]: every finding of the v1.23.7 audit with what was verified against the code, whether it is reachable today, and its status (fixed in 1.23.9, 1.23.10 and 1.23.11; open; or not yet verified), plus the decisions the open High items need. Records two corrections to the audit: findings #1 and #2 are latent because `FileTransferManager` is never instantiated, and Export does not execute anything.
+- **`core/benchmarking.py`** imported the POSIX-only `resource` module at module level, so on Windows any test module importing it died during collection. The import is now guarded and `peak_rss_mb()` returns `0.0` ("not measured") when `resource` is missing; no Windows-specific measurement was added because it cannot be tested here. `tests/test_benchmarking_portability.py` [NEW] (3) checks the no-`resource` case on a private copy of the file, not by reloading the shared module (a first version used `importlib.reload`, which redefined `Direction` and made `test_regression_gate` fail depending on test order); two of the three fail against the old module.
+- **Full suite**: 1075 passed, 1 skipped, 7 deselected (was 1072).
+
 ## [1.23.11] — Phase audit #1 #2 #10: One filename sanitizer
 
 ### Security
